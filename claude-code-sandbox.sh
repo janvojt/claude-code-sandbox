@@ -179,8 +179,7 @@ BWRAP_ARGS=(
     
     # Tmp directories
     --tmpfs /tmp
-    --tmpfs /run
-    
+
     # Make root readonly
     --ro-bind /sys /sys
 )
@@ -207,33 +206,27 @@ else
     exit 1
 fi
 
-# Process blacklist - create overlays to hide files
-OVERLAY_WORK=$(mktemp -d)
-OVERLAY_UPPER=$(mktemp -d)
-OVERLAY_MERGED=$(mktemp -d)
-trap "rm -rf $OVERLAY_WORK $OVERLAY_UPPER $OVERLAY_MERGED" EXIT
+# Setup minimal home directory using tmpfs
+BWRAP_ARGS+=(--tmpfs "$HOME")
 
-# Copy working directory to merged overlay
-cp -a "$WORKING_DIR/." "$OVERLAY_MERGED/"
+# Bind working directory (after tmpfs home, so it's visible)
+BWRAP_ARGS+=(--bind "$WORKING_DIR" "$WORKING_DIR")
 
-# Process blacklist patterns
+# Process blacklist patterns and hide them with tmpfs overlays
+BLACKLISTED_PATHS=()
 if [[ -f "$BLACKLIST_FILE" ]]; then
     echo -e "\n${YELLOW}Processing blacklist patterns:${NC}" >&2
     while IFS= read -r pattern || [[ -n "$pattern" ]]; do
         [[ "$pattern" =~ ^[[:space:]]*# ]] && continue
         [[ -z "${pattern// }" ]] && continue
-        
+
         # Find matching files/directories in working directory
         if compgen -G "$WORKING_DIR/$pattern" > /dev/null 2>&1; then
             for match in "$WORKING_DIR"/$pattern; do
                 if [[ -e "$match" ]]; then
-                    rel_path="${match#$WORKING_DIR/}"
-                    target="$OVERLAY_MERGED/$rel_path"
-                    
-                    if [[ -e "$target" ]]; then
-                        rm -rf "$target"
-                        echo -e "${RED}✗${NC} Blacklisted: $rel_path" >&2
-                    fi
+                    # Add tmpfs to hide each blacklisted path
+                    BWRAP_ARGS+=(--tmpfs "$match")
+                    echo -e "${RED}✗${NC} Blacklisted: ${match#$WORKING_DIR/}" >&2
                 fi
             done
         else
@@ -242,20 +235,34 @@ if [[ -f "$BLACKLIST_FILE" ]]; then
     done < "$BLACKLIST_FILE"
 fi
 
-# Bind the filtered working directory
-BWRAP_ARGS+=(--bind "$OVERLAY_MERGED" "$WORKING_DIR")
-
-# Setup minimal home directory
-TEMP_HOME=$(mktemp -d)
-trap "rm -rf $TEMP_HOME $OVERLAY_WORK $OVERLAY_UPPER $OVERLAY_MERGED" EXIT
-
-# Copy only Claude configuration
-mkdir -p "$TEMP_HOME/.config"
-if [[ -d "$HOME/.config/claude" ]]; then
-    cp -r "$HOME/.config/claude" "$TEMP_HOME/.config/" 2>/dev/null || true
+# Bind claude binary
+if [[ -x "$HOME/.local/bin/claude" ]]; then
+    BWRAP_ARGS+=(--ro-bind "$HOME/.local/bin/claude" "$HOME/.local/bin/claude")
+    echo -e "${GREEN}✓${NC} Mounted ~/.local/bin/claude (read-only)" >&2
 fi
 
-BWRAP_ARGS+=(--bind "$TEMP_HOME" "$HOME")
+# Bind ~/.claude directory (main config location)
+if [[ -d "$HOME/.claude" ]]; then
+    BWRAP_ARGS+=(--bind "$HOME/.claude" "$HOME/.claude")
+    echo -e "${GREEN}✓${NC} Mounted ~/.claude (read-write)" >&2
+fi
+
+# Bind ~/.claude.json file (state file in home directory)
+if [[ -f "$HOME/.claude.json" ]]; then
+    BWRAP_ARGS+=(--bind "$HOME/.claude.json" "$HOME/.claude.json")
+    echo -e "${GREEN}✓${NC} Mounted ~/.claude.json (read-write)" >&2
+else
+    # Create empty file if it doesn't exist so Claude can write to it
+    touch "$HOME/.claude.json"
+    BWRAP_ARGS+=(--bind "$HOME/.claude.json" "$HOME/.claude.json")
+    echo -e "${YELLOW}✓${NC} Created and mounted ~/.claude.json (read-write)" >&2
+fi
+
+# Bind ~/.claude.json.backup if it exists
+if [[ -f "$HOME/.claude.json.backup" ]]; then
+    BWRAP_ARGS+=(--bind "$HOME/.claude.json.backup" "$HOME/.claude.json.backup")
+fi
+
 BWRAP_ARGS+=(--setenv HOME "$HOME")
 BWRAP_ARGS+=(--setenv PWD "$WORKING_DIR")
 BWRAP_ARGS+=(--chdir "$WORKING_DIR")
@@ -283,14 +290,14 @@ if [[ "$ALLOW_LOCAL_NET" = false ]]; then
 EOHOSTS
     
     BWRAP_ARGS+=(--ro-bind "$TEMP_HOSTS" /etc/hosts)
-    trap "rm -rf $TEMP_HOME $OVERLAY_WORK $OVERLAY_UPPER $OVERLAY_MERGED $TEMP_HOSTS" EXIT
-    
+    trap "rm -rf $TEMP_HOSTS" EXIT
+
     # Create resolv.conf that blocks local DNS
     TEMP_RESOLV=$(mktemp)
     echo "nameserver 8.8.8.8" > "$TEMP_RESOLV"
     echo "nameserver 1.1.1.1" >> "$TEMP_RESOLV"
     BWRAP_ARGS+=(--ro-bind "$TEMP_RESOLV" /etc/resolv.conf)
-    trap "rm -rf $TEMP_HOME $OVERLAY_WORK $OVERLAY_UPPER $OVERLAY_MERGED $TEMP_HOSTS $TEMP_RESOLV" EXIT
+    trap "rm -rf $TEMP_HOSTS $TEMP_RESOLV" EXIT
     
     echo -e "${YELLOW}Note: Network blocking via /etc/hosts is DNS-level only.${NC}" >&2
     echo -e "${YELLOW}For complete IP-level blocking, use --unshare-net with slirp4netns.${NC}" >&2
@@ -304,9 +311,17 @@ fi
 
 # Set minimal environment
 BWRAP_ARGS+=(--setenv TERM "${TERM:-xterm-256color}")
-BWRAP_ARGS+=(--setenv PATH "/usr/local/bin:/usr/bin:/bin")
+BWRAP_ARGS+=(--setenv PATH "$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")
 BWRAP_ARGS+=(--unsetenv SSH_AUTH_SOCK)
 BWRAP_ARGS+=(--unsetenv SSH_AGENT_PID)
+
+# Preserve Claude-specific environment variables
+if [[ -n "${CLAUDECODE:-}" ]]; then
+    BWRAP_ARGS+=(--setenv CLAUDECODE "$CLAUDECODE")
+fi
+if [[ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]; then
+    BWRAP_ARGS+=(--setenv CLAUDE_CODE_ENTRYPOINT "$CLAUDE_CODE_ENTRYPOINT")
+fi
 
 # Display configuration summary
 echo -e "\n${GREEN}=== Claude Code Sandbox Configuration ===${NC}" >&2
@@ -316,5 +331,8 @@ echo -e "Blacklist File: ${YELLOW}$BLACKLIST_FILE${NC}" >&2
 echo -e "Local Network: ${YELLOW}$(if $ALLOW_LOCAL_NET; then echo 'ALLOWED'; else echo 'BLOCKED'; fi)${NC}" >&2
 echo -e "${GREEN}=========================================${NC}\n" >&2
 
+# Find claude executable
+CLAUDE_BIN=$(command -v claude)
+
 # Execute Claude Code in sandbox
-exec bwrap "${BWRAP_ARGS[@]}" -- claude "${CLAUDE_ARGS[@]}"
+exec bwrap "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"

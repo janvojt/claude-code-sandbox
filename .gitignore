@@ -2,3 +2,6 @@
 # IDE files
 .idea/
 *.iml
+
+# General rules
+*.local.json
