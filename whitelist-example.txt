@@ -1,0 +1,40 @@
+# Claude Code Sandbox Whitelist
+# Add absolute paths (one per line) that Claude should be able to read
+# Lines starting with # are ignored
+# You can use environment variables like $HOME
+
+# Essential system directories for executables
+/usr/bin
+/usr/lib
+/usr/lib64
+/usr/share
+/lib
+/lib64
+/bin
+/sbin
+
+# Common development tools
+/usr/local/bin
+/usr/local/lib
+/usr/local/share
+
+# Programming language runtimes and tools
+/usr/lib/jvm
+/usr/lib/node_modules
+/opt/maven
+/opt/gradle
+
+# System configuration (generally safe)
+/etc/alternatives
+/etc/ssl/certs
+/etc/ca-certificates
+
+# Python packages (system-wide)
+/usr/lib/python3
+/usr/lib/python3.10
+/usr/lib/python3.11
+/usr/lib/python3.12
+
+# Optional: Add your project-specific paths
+# /opt/my-company/shared-libs
+# /data/public-datasets

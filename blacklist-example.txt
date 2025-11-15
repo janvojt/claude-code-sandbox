@@ -1,0 +1,93 @@
+# Claude Code Sandbox Blacklist
+# Add paths relative to working directory that Claude should NOT access
+# Lines starting with # are ignored
+# Supports glob patterns (*, ?)
+
+# Environment files with secrets
+.env
+.env.*
+*.env
+env.local
+.envrc
+
+# Configuration files with secrets
+secrets.yaml
+secrets.yml
+secrets.json
+config/secrets.*
+application-secrets.*
+
+# SSH and crypto keys
+.ssh
+.ssh/*
+*.pem
+*.key
+*_rsa
+*_ed25519
+*.p12
+*.pfx
+*.keystore
+
+# AWS credentials
+.aws
+.aws/*
+
+# GCP credentials
+.gcp
+.config/gcloud
+*-key.json
+service-account*.json
+
+# Azure credentials
+.azure
+
+# Kubernetes configs
+.kube
+.kube/*
+kubeconfig
+kubeconfig.*
+
+# Docker configs with credentials
+.docker/config.json
+
+# Database credentials
+config/database.yml
+database.ini
+.pgpass
+
+# Ansible vaults
+*vault*.yml
+ansible-vault.*
+
+# Private keys for various tools
+.gnupg
+*.asc
+*.gpg
+
+# Password managers
+*.kdbx
+*.agilekeychain
+.password-store
+
+# Terraform state (may contain secrets)
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+
+# Git credentials
+.git-credentials
+.netrc
+
+# NPM/Yarn credentials
+.npmrc
+.yarnrc
+
+# IDE configs that may contain sensitive data
+.idea/dataSources.xml
+.vscode/settings.json
+
+# Private notes or documentation
+PRIVATE.md
+TODO-PRIVATE.md
+credentials.txt
+passwords.txt
