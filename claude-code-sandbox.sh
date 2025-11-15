@@ -244,9 +244,15 @@ if [[ -f "$BLACKLIST_FILE" ]]; then
         if compgen -G "$WORKING_DIR/$pattern" > /dev/null 2>&1; then
             for match in "$WORKING_DIR"/$pattern; do
                 if [[ -e "$match" ]]; then
-                    # Add tmpfs to hide each blacklisted path
-                    BWRAP_ARGS+=(--tmpfs "$match")
-                    log_info "${RED}✗${NC} Blacklisted: ${match#$WORKING_DIR/}"
+                    if [[ -d "$match" ]]; then
+                        # Hide directories with tmpfs overlay
+                        BWRAP_ARGS+=(--tmpfs "$match")
+                        log_info "${RED}✗${NC} Blacklisted (dir): ${match#$WORKING_DIR/}"
+                    else
+                        # Hide files by binding /dev/null over them
+                        BWRAP_ARGS+=(--ro-bind /dev/null "$match")
+                        log_info "${RED}✗${NC} Blacklisted (file): ${match#$WORKING_DIR/}"
+                    fi
                 fi
             done
         else
