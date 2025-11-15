@@ -168,15 +168,14 @@ fi
 
 # Build bubblewrap arguments
 BWRAP_ARGS=(
-    # Create new namespaces
+    # Create new namespaces (including network namespace for isolation)
     --unshare-all
-    --share-net  # We'll handle network filtering via iptables/hosts
     --die-with-parent
-    
+
     # Proc and dev
     --proc /proc
     --dev /dev
-    
+
     # Tmp directories
     --tmpfs /tmp
 
@@ -213,7 +212,6 @@ BWRAP_ARGS+=(--tmpfs "$HOME")
 BWRAP_ARGS+=(--bind "$WORKING_DIR" "$WORKING_DIR")
 
 # Process blacklist patterns and hide them with tmpfs overlays
-BLACKLISTED_PATHS=()
 if [[ -f "$BLACKLIST_FILE" ]]; then
     echo -e "\n${YELLOW}Processing blacklist patterns:${NC}" >&2
     while IFS= read -r pattern || [[ -n "$pattern" ]]; do
@@ -267,45 +265,48 @@ BWRAP_ARGS+=(--setenv HOME "$HOME")
 BWRAP_ARGS+=(--setenv PWD "$WORKING_DIR")
 BWRAP_ARGS+=(--chdir "$WORKING_DIR")
 
-# Network restrictions via /etc/hosts
+# Network namespace isolation
+USE_SLIRP4NETNS=false
 if [[ "$ALLOW_LOCAL_NET" = false ]]; then
     echo -e "\n${GREEN}Network restrictions active - blocking local networks${NC}" >&2
-    
-    TEMP_HOSTS=$(mktemp)
-    cat > "$TEMP_HOSTS" << 'EOHOSTS'
-# Localhost
+
+    # Check if slirp4netns is available for internet-only access
+    if command -v slirp4netns &> /dev/null; then
+        echo -e "${GREEN}Using slirp4netns for internet-only access (localhost blocked)${NC}" >&2
+        USE_SLIRP4NETNS=true
+
+        # Configure DNS for slirp4netns
+        TEMP_RESOLV=$(mktemp)
+        echo "nameserver 10.0.2.3" > "$TEMP_RESOLV"  # slirp4netns default DNS
+        BWRAP_ARGS+=(--ro-bind "$TEMP_RESOLV" /etc/resolv.conf)
+        trap 'rm -rf $TEMP_RESOLV' EXIT
+
+        # Add minimal /etc/hosts
+        TEMP_HOSTS=$(mktemp)
+        cat > "$TEMP_HOSTS" << 'EOHOSTS'
 127.0.0.1 localhost
 ::1 localhost ip6-localhost ip6-loopback
-
-# Block common local network ranges via DNS resolution
-127.0.0.1 10.0.0.1 10.0.0.2 10.255.255.254
-127.0.0.1 172.16.0.1 172.31.255.254
-127.0.0.1 192.168.0.1 192.168.1.1 192.168.255.254
-127.0.0.1 169.254.0.1 169.254.255.254
-
-# Block localhost alternatives
-127.0.0.1 localhost.localdomain
-127.0.0.1 127.0.0.2 127.0.0.3 127.255.255.254
-
 EOHOSTS
-    
-    BWRAP_ARGS+=(--ro-bind "$TEMP_HOSTS" /etc/hosts)
-    trap "rm -rf $TEMP_HOSTS" EXIT
-
-    # Create resolv.conf that blocks local DNS
-    TEMP_RESOLV=$(mktemp)
-    echo "nameserver 8.8.8.8" > "$TEMP_RESOLV"
-    echo "nameserver 1.1.1.1" >> "$TEMP_RESOLV"
-    BWRAP_ARGS+=(--ro-bind "$TEMP_RESOLV" /etc/resolv.conf)
-    trap "rm -rf $TEMP_HOSTS $TEMP_RESOLV" EXIT
-    
-    echo -e "${YELLOW}Note: Network blocking via /etc/hosts is DNS-level only.${NC}" >&2
-    echo -e "${YELLOW}For complete IP-level blocking, use --unshare-net with slirp4netns.${NC}" >&2
+        BWRAP_ARGS+=(--ro-bind "$TEMP_HOSTS" /etc/hosts)
+        trap 'rm -rf $TEMP_RESOLV $TEMP_HOSTS' EXIT
+    else
+        echo -e "${YELLOW}slirp4netns not found - using complete network isolation${NC}" >&2
+        echo -e "${YELLOW}No network access (including internet) in sandbox${NC}" >&2
+        echo -e "${YELLOW}Install slirp4netns for internet-only access, or use --allow-local-net${NC}" >&2
+    fi
 else
     echo -e "\n${YELLOW}Warning: Local network access is ALLOWED${NC}" >&2
+    # Share the network namespace to allow all network access
+    BWRAP_ARGS+=(--share-net)
+
     # Use system resolv.conf
     if [[ -f /etc/resolv.conf ]]; then
         BWRAP_ARGS+=(--ro-bind /etc/resolv.conf /etc/resolv.conf)
+    fi
+
+    # Bind /etc/hosts for name resolution
+    if [[ -f /etc/hosts ]]; then
+        BWRAP_ARGS+=(--ro-bind /etc/hosts /etc/hosts)
     fi
 fi
 
@@ -334,5 +335,66 @@ echo -e "${GREEN}=========================================${NC}\n" >&2
 # Find claude executable
 CLAUDE_BIN=$(command -v claude)
 
-# Execute Claude Code in sandbox
-exec bwrap "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
+# Execute Claude Code in sandbox with optional slirp4netns
+if [[ "$USE_SLIRP4NETNS" = true ]]; then
+    # Create a wrapper script that will be executed inside the sandbox
+    WRAPPER_SCRIPT=$(mktemp)
+    cat > "$WRAPPER_SCRIPT" << 'EOWRAPPER'
+#!/bin/bash
+# Wait for network to be ready (slirp4netns needs time to attach)
+for i in {1..50}; do
+    if ip link show tap0 &>/dev/null 2>&1; then
+        # Wait a bit more for network to be fully configured
+        sleep 0.1
+        break
+    fi
+    sleep 0.1
+done
+# Execute Claude Code
+exec "$@"
+EOWRAPPER
+    chmod +x "$WRAPPER_SCRIPT"
+    trap 'rm -rf $WRAPPER_SCRIPT $TEMP_RESOLV $TEMP_HOSTS' EXIT
+
+    # Enable job control to allow foregrounding
+    set -m
+
+    # Run bwrap in background to get PID for slirp4netns
+    bwrap "${BWRAP_ARGS[@]}" \
+        --ro-bind "$WRAPPER_SCRIPT" /tmp/wrapper.sh \
+        -- \
+        /tmp/wrapper.sh "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}" &
+
+    BWRAP_PID=$!
+
+    # Small delay to ensure the process has started and network namespace is created
+    sleep 0.3
+
+    # Attach slirp4netns to the sandbox
+    # Use --disable-host-loopback to prevent connections to 127.0.0.1 on the host
+    slirp4netns --configure --mtu=65520 --disable-host-loopback "$BWRAP_PID" tap0 >/dev/null 2>&1 &
+    SLIRP_PID=$!
+
+    # Cleanup function
+    cleanup_slirp() {
+        kill "$SLIRP_PID" 2>/dev/null || true
+        kill "$BWRAP_PID" 2>/dev/null || true
+        wait "$SLIRP_PID" 2>/dev/null || true
+        wait "$BWRAP_PID" 2>/dev/null || true
+        rm -rf "$WRAPPER_SCRIPT" "$TEMP_RESOLV" "$TEMP_HOSTS"
+    }
+    trap cleanup_slirp EXIT INT TERM
+
+    # Bring bwrap back to foreground to restore TTY access
+    fg %1 1>/dev/null
+    EXIT_CODE=$?
+
+    # Cleanup
+    kill "$SLIRP_PID" 2>/dev/null || true
+    wait "$SLIRP_PID" 2>/dev/null || true
+
+    exit "$EXIT_CODE"
+else
+    # Execute directly without slirp4netns
+    exec bwrap "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
+fi
