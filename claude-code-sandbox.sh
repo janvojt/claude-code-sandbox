@@ -12,6 +12,7 @@ NC='\033[0m' # No Color
 WHITELIST_FILE="${CLAUDE_SANDBOX_WHITELIST:-$HOME/.config/claude-sandbox/whitelist.txt}"
 BLACKLIST_FILE="${CLAUDE_SANDBOX_BLACKLIST:-$HOME/.config/claude-sandbox/blacklist.txt}"
 ALLOW_LOCAL_NET=false
+QUIET=false
 WORKING_DIR="$(pwd)"
 
 # Print usage
@@ -25,6 +26,8 @@ OPTIONS:
     --whitelist FILE        Path to whitelist file (default: $WHITELIST_FILE)
     --blacklist FILE        Path to blacklist file (default: $BLACKLIST_FILE)
     --allow-local-net       Allow access to local network (disabled by default)
+    --quiet, -q            Suppress informational output (faster startup)
+    --verbose, -v          Show detailed output (default)
     -h, --help             Show this help message
 
 CONFIGURATION FILES:
@@ -57,6 +60,14 @@ while [[ $# -gt 0 ]]; do
             ALLOW_LOCAL_NET=true
             shift
             ;;
+        --quiet|-q)
+            QUIET=true
+            shift
+            ;;
+        --verbose|-v)
+            QUIET=false
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -72,15 +83,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Helper function for conditional output
+log_info() {
+    [[ "$QUIET" = false ]] && echo -e "$@" >&2
+}
+
+# Cache command availability checks
+BWRAP_BIN=$(command -v bwrap 2>/dev/null)
+CLAUDE_BIN=$(command -v claude 2>/dev/null)
+SLIRP4NETNS_BIN=$(command -v slirp4netns 2>/dev/null)
+
 # Check if bubblewrap is installed
-if ! command -v bwrap &> /dev/null; then
+if [[ -z "$BWRAP_BIN" ]]; then
     echo -e "${RED}Error: bubblewrap (bwrap) is not installed${NC}" >&2
     echo "Install it with: sudo apt install bubblewrap (Debian/Ubuntu) or sudo dnf install bubblewrap (Fedora)" >&2
     exit 1
 fi
 
 # Check if claude is installed
-if ! command -v claude &> /dev/null; then
+if [[ -z "$CLAUDE_BIN" ]]; then
     echo -e "${RED}Error: claude is not installed${NC}" >&2
     echo "Install it from: https://docs.claude.com/en/docs/claude-code" >&2
     exit 1
@@ -189,15 +210,16 @@ if [[ -f "$WHITELIST_FILE" ]]; then
         # Skip comments and empty lines
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ -z "${line// }" ]] && continue
-        
-        # Expand and validate path
-        path=$(eval echo "$line")
-        
+
+        # Expand environment variables without eval (faster)
+        path="${line/#\~/$HOME}"
+        path="${path//\$HOME/$HOME}"
+
         if [[ -e "$path" ]]; then
             BWRAP_ARGS+=(--ro-bind "$path" "$path")
-            echo -e "${GREEN}✓${NC} Whitelisted: $path" >&2
+            log_info "${GREEN}✓${NC} Whitelisted: $path"
         else
-            echo -e "${YELLOW}⚠${NC} Skipping non-existent path: $path" >&2
+            log_info "${YELLOW}⚠${NC} Skipping non-existent path: $path"
         fi
     done < "$WHITELIST_FILE"
 else
@@ -213,7 +235,7 @@ BWRAP_ARGS+=(--bind "$WORKING_DIR" "$WORKING_DIR")
 
 # Process blacklist patterns and hide them with tmpfs overlays
 if [[ -f "$BLACKLIST_FILE" ]]; then
-    echo -e "\n${YELLOW}Processing blacklist patterns:${NC}" >&2
+    log_info "\n${YELLOW}Processing blacklist patterns:${NC}"
     while IFS= read -r pattern || [[ -n "$pattern" ]]; do
         [[ "$pattern" =~ ^[[:space:]]*# ]] && continue
         [[ -z "${pattern// }" ]] && continue
@@ -224,11 +246,11 @@ if [[ -f "$BLACKLIST_FILE" ]]; then
                 if [[ -e "$match" ]]; then
                     # Add tmpfs to hide each blacklisted path
                     BWRAP_ARGS+=(--tmpfs "$match")
-                    echo -e "${RED}✗${NC} Blacklisted: ${match#$WORKING_DIR/}" >&2
+                    log_info "${RED}✗${NC} Blacklisted: ${match#$WORKING_DIR/}"
                 fi
             done
         else
-            echo -e "${YELLOW}⚠${NC} No matches for pattern: $pattern" >&2
+            log_info "${YELLOW}⚠${NC} No matches for pattern: $pattern"
         fi
     done < "$BLACKLIST_FILE"
 fi
@@ -236,24 +258,24 @@ fi
 # Bind claude binary
 if [[ -x "$HOME/.local/bin/claude" ]]; then
     BWRAP_ARGS+=(--ro-bind "$HOME/.local/bin/claude" "$HOME/.local/bin/claude")
-    echo -e "${GREEN}✓${NC} Mounted ~/.local/bin/claude (read-only)" >&2
+    log_info "${GREEN}✓${NC} Mounted ~/.local/bin/claude (read-only)"
 fi
 
 # Bind ~/.claude directory (main config location)
 if [[ -d "$HOME/.claude" ]]; then
     BWRAP_ARGS+=(--bind "$HOME/.claude" "$HOME/.claude")
-    echo -e "${GREEN}✓${NC} Mounted ~/.claude (read-write)" >&2
+    log_info "${GREEN}✓${NC} Mounted ~/.claude (read-write)"
 fi
 
 # Bind ~/.claude.json file (state file in home directory)
 if [[ -f "$HOME/.claude.json" ]]; then
     BWRAP_ARGS+=(--bind "$HOME/.claude.json" "$HOME/.claude.json")
-    echo -e "${GREEN}✓${NC} Mounted ~/.claude.json (read-write)" >&2
+    log_info "${GREEN}✓${NC} Mounted ~/.claude.json (read-write)"
 else
     # Create empty file if it doesn't exist so Claude can write to it
     touch "$HOME/.claude.json"
     BWRAP_ARGS+=(--bind "$HOME/.claude.json" "$HOME/.claude.json")
-    echo -e "${YELLOW}✓${NC} Created and mounted ~/.claude.json (read-write)" >&2
+    log_info "${YELLOW}✓${NC} Created and mounted ~/.claude.json (read-write)"
 fi
 
 # Bind ~/.claude.json.backup if it exists
@@ -268,11 +290,11 @@ BWRAP_ARGS+=(--chdir "$WORKING_DIR")
 # Network namespace isolation
 USE_SLIRP4NETNS=false
 if [[ "$ALLOW_LOCAL_NET" = false ]]; then
-    echo -e "\n${GREEN}Network restrictions active - blocking local networks${NC}" >&2
+    log_info "\n${GREEN}Network restrictions active - blocking local networks${NC}"
 
-    # Check if slirp4netns is available for internet-only access
-    if command -v slirp4netns &> /dev/null; then
-        echo -e "${GREEN}Using slirp4netns for internet-only access (localhost blocked)${NC}" >&2
+    # Check if slirp4netns is available for internet-only access (using cached value)
+    if [[ -n "$SLIRP4NETNS_BIN" ]]; then
+        log_info "${GREEN}Using slirp4netns for internet-only access (localhost blocked)${NC}"
         USE_SLIRP4NETNS=true
 
         # Configure DNS for slirp4netns
@@ -290,12 +312,12 @@ EOHOSTS
         BWRAP_ARGS+=(--ro-bind "$TEMP_HOSTS" /etc/hosts)
         trap 'rm -rf $TEMP_RESOLV $TEMP_HOSTS' EXIT
     else
-        echo -e "${YELLOW}slirp4netns not found - using complete network isolation${NC}" >&2
-        echo -e "${YELLOW}No network access (including internet) in sandbox${NC}" >&2
-        echo -e "${YELLOW}Install slirp4netns for internet-only access, or use --allow-local-net${NC}" >&2
+        log_info "${YELLOW}slirp4netns not found - using complete network isolation${NC}"
+        log_info "${YELLOW}No network access (including internet) in sandbox${NC}"
+        log_info "${YELLOW}Install slirp4netns for internet-only access, or use --allow-local-net${NC}"
     fi
 else
-    echo -e "\n${YELLOW}Warning: Local network access is ALLOWED${NC}" >&2
+    log_info "\n${YELLOW}Warning: Local network access is ALLOWED${NC}"
     # Share the network namespace to allow all network access
     BWRAP_ARGS+=(--share-net)
 
@@ -325,15 +347,12 @@ if [[ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]; then
 fi
 
 # Display configuration summary
-echo -e "\n${GREEN}=== Claude Code Sandbox Configuration ===${NC}" >&2
-echo -e "Working Directory: ${YELLOW}$WORKING_DIR${NC}" >&2
-echo -e "Whitelist File: ${YELLOW}$WHITELIST_FILE${NC}" >&2
-echo -e "Blacklist File: ${YELLOW}$BLACKLIST_FILE${NC}" >&2
-echo -e "Local Network: ${YELLOW}$(if $ALLOW_LOCAL_NET; then echo 'ALLOWED'; else echo 'BLOCKED'; fi)${NC}" >&2
-echo -e "${GREEN}=========================================${NC}\n" >&2
-
-# Find claude executable
-CLAUDE_BIN=$(command -v claude)
+log_info "\n${GREEN}=== Claude Code Sandbox Configuration ===${NC}"
+log_info "Working Directory: ${YELLOW}$WORKING_DIR${NC}"
+log_info "Whitelist File: ${YELLOW}$WHITELIST_FILE${NC}"
+log_info "Blacklist File: ${YELLOW}$BLACKLIST_FILE${NC}"
+log_info "Local Network: ${YELLOW}$(if $ALLOW_LOCAL_NET; then echo 'ALLOWED'; else echo 'BLOCKED'; fi)${NC}"
+log_info "${GREEN}=========================================${NC}\n"
 
 # Execute Claude Code in sandbox with optional slirp4netns
 if [[ "$USE_SLIRP4NETNS" = true ]]; then
@@ -342,13 +361,12 @@ if [[ "$USE_SLIRP4NETNS" = true ]]; then
     cat > "$WRAPPER_SCRIPT" << 'EOWRAPPER'
 #!/bin/bash
 # Wait for network to be ready (slirp4netns needs time to attach)
-for i in {1..50}; do
+# Optimized: faster polling with reduced total wait time
+for i in {1..100}; do
     if ip link show tap0 &>/dev/null 2>&1; then
-        # Wait a bit more for network to be fully configured
-        sleep 0.1
         break
     fi
-    sleep 0.1
+    sleep 0.02
 done
 # Execute Claude Code
 exec "$@"
@@ -360,19 +378,19 @@ EOWRAPPER
     set -m
 
     # Run bwrap in background to get PID for slirp4netns
-    bwrap "${BWRAP_ARGS[@]}" \
+    "$BWRAP_BIN" "${BWRAP_ARGS[@]}" \
         --ro-bind "$WRAPPER_SCRIPT" /tmp/wrapper.sh \
         -- \
         /tmp/wrapper.sh "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}" &
 
     BWRAP_PID=$!
 
-    # Small delay to ensure the process has started and network namespace is created
-    sleep 0.3
+    # Reduced delay for faster startup (namespace creation is usually instant)
+    sleep 0.05
 
     # Attach slirp4netns to the sandbox
     # Use --disable-host-loopback to prevent connections to 127.0.0.1 on the host
-    slirp4netns --configure --mtu=65520 --disable-host-loopback "$BWRAP_PID" tap0 >/dev/null 2>&1 &
+    "$SLIRP4NETNS_BIN" --configure --mtu=65520 --disable-host-loopback "$BWRAP_PID" tap0 >/dev/null 2>&1 &
     SLIRP_PID=$!
 
     # Cleanup function
@@ -396,5 +414,5 @@ EOWRAPPER
     exit "$EXIT_CODE"
 else
     # Execute directly without slirp4netns
-    exec bwrap "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
+    exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
 fi
