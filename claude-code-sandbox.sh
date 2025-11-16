@@ -11,7 +11,6 @@ NC='\033[0m' # No Color
 # Default configuration
 WHITELIST_FILE="${CLAUDE_SANDBOX_WHITELIST:-$HOME/.config/claude-sandbox/whitelist.txt}"
 BLACKLIST_FILE="${CLAUDE_SANDBOX_BLACKLIST:-$HOME/.config/claude-sandbox/blacklist.txt}"
-ALLOW_LOCAL_NET=false
 QUIET=false
 WORKING_DIR="$(pwd)"
 
@@ -25,7 +24,6 @@ Securely run Claude Code in a sandboxed environment using bubblewrap.
 OPTIONS:
     --whitelist FILE        Path to whitelist file (default: $WHITELIST_FILE)
     --blacklist FILE        Path to blacklist file (default: $BLACKLIST_FILE)
-    --allow-local-net       Allow access to local network (disabled by default)
     --quiet, -q            Suppress informational output (faster startup)
     --verbose, -v          Show detailed output (default)
     -h, --help             Show this help message
@@ -36,7 +34,6 @@ CONFIGURATION FILES:
 
 EXAMPLES:
     $0
-    $0 --allow-local-net
     $0 --whitelist /path/to/custom-whitelist.txt
     $0 -- --model claude-sonnet-4-5
 
@@ -55,10 +52,6 @@ while [[ $# -gt 0 ]]; do
         --blacklist)
             BLACKLIST_FILE="$2"
             shift 2
-            ;;
-        --allow-local-net)
-            ALLOW_LOCAL_NET=true
-            shift
             ;;
         --quiet|-q)
             QUIET=true
@@ -91,7 +84,6 @@ log_info() {
 # Cache command availability checks
 BWRAP_BIN=$(command -v bwrap 2>/dev/null)
 CLAUDE_BIN=$(command -v claude 2>/dev/null)
-SLIRP4NETNS_BIN=$(command -v slirp4netns 2>/dev/null)
 
 # Check if bubblewrap is installed
 if [[ -z "$BWRAP_BIN" ]]; then
@@ -293,49 +285,20 @@ BWRAP_ARGS+=(--setenv HOME "$HOME")
 BWRAP_ARGS+=(--setenv PWD "$WORKING_DIR")
 BWRAP_ARGS+=(--chdir "$WORKING_DIR")
 
-# Network namespace isolation
-USE_SLIRP4NETNS=false
-if [[ "$ALLOW_LOCAL_NET" = false ]]; then
-    log_info "\n${GREEN}Network restrictions active - blocking local networks${NC}"
+# Network configuration - allow all network access
+log_info "\n${GREEN}Network: Full access enabled (local and internet)${NC}"
 
-    # Check if slirp4netns is available for internet-only access (using cached value)
-    if [[ -n "$SLIRP4NETNS_BIN" ]]; then
-        log_info "${GREEN}Using slirp4netns for internet-only access (localhost blocked)${NC}"
-        USE_SLIRP4NETNS=true
+# Share the network namespace to allow all network access
+BWRAP_ARGS+=(--share-net)
 
-        # Configure DNS for slirp4netns
-        TEMP_RESOLV=$(mktemp)
-        echo "nameserver 10.0.2.3" > "$TEMP_RESOLV"  # slirp4netns default DNS
-        BWRAP_ARGS+=(--ro-bind "$TEMP_RESOLV" /etc/resolv.conf)
-        trap 'rm -rf $TEMP_RESOLV' EXIT
+# Use system DNS configuration
+if [[ -f /etc/resolv.conf ]]; then
+    BWRAP_ARGS+=(--ro-bind /etc/resolv.conf /etc/resolv.conf)
+fi
 
-        # Add minimal /etc/hosts
-        TEMP_HOSTS=$(mktemp)
-        cat > "$TEMP_HOSTS" << 'EOHOSTS'
-127.0.0.1 localhost
-::1 localhost ip6-localhost ip6-loopback
-EOHOSTS
-        BWRAP_ARGS+=(--ro-bind "$TEMP_HOSTS" /etc/hosts)
-        trap 'rm -rf $TEMP_RESOLV $TEMP_HOSTS' EXIT
-    else
-        log_info "${YELLOW}slirp4netns not found - using complete network isolation${NC}"
-        log_info "${YELLOW}No network access (including internet) in sandbox${NC}"
-        log_info "${YELLOW}Install slirp4netns for internet-only access, or use --allow-local-net${NC}"
-    fi
-else
-    log_info "\n${YELLOW}Warning: Local network access is ALLOWED${NC}"
-    # Share the network namespace to allow all network access
-    BWRAP_ARGS+=(--share-net)
-
-    # Use system resolv.conf
-    if [[ -f /etc/resolv.conf ]]; then
-        BWRAP_ARGS+=(--ro-bind /etc/resolv.conf /etc/resolv.conf)
-    fi
-
-    # Bind /etc/hosts for name resolution
-    if [[ -f /etc/hosts ]]; then
-        BWRAP_ARGS+=(--ro-bind /etc/hosts /etc/hosts)
-    fi
+# Bind /etc/hosts for name resolution
+if [[ -f /etc/hosts ]]; then
+    BWRAP_ARGS+=(--ro-bind /etc/hosts /etc/hosts)
 fi
 
 # Set minimal environment
@@ -357,68 +320,7 @@ log_info "\n${GREEN}=== Claude Code Sandbox Configuration ===${NC}"
 log_info "Working Directory: ${YELLOW}$WORKING_DIR${NC}"
 log_info "Whitelist File: ${YELLOW}$WHITELIST_FILE${NC}"
 log_info "Blacklist File: ${YELLOW}$BLACKLIST_FILE${NC}"
-log_info "Local Network: ${YELLOW}$(if $ALLOW_LOCAL_NET; then echo 'ALLOWED'; else echo 'BLOCKED'; fi)${NC}"
 log_info "${GREEN}=========================================${NC}\n"
 
-# Execute Claude Code in sandbox with optional slirp4netns
-if [[ "$USE_SLIRP4NETNS" = true ]]; then
-    # Create a wrapper script that will be executed inside the sandbox
-    WRAPPER_SCRIPT=$(mktemp)
-    cat > "$WRAPPER_SCRIPT" << 'EOWRAPPER'
-#!/bin/bash
-# Wait for network to be ready (slirp4netns needs time to attach)
-# Optimized: faster polling with reduced total wait time
-for i in {1..100}; do
-    if ip link show tap0 &>/dev/null 2>&1; then
-        break
-    fi
-    sleep 0.02
-done
-# Execute Claude Code
-exec "$@"
-EOWRAPPER
-    chmod +x "$WRAPPER_SCRIPT"
-    trap 'rm -rf $WRAPPER_SCRIPT $TEMP_RESOLV $TEMP_HOSTS' EXIT
-
-    # Enable job control to allow foregrounding
-    set -m
-
-    # Run bwrap in background to get PID for slirp4netns
-    "$BWRAP_BIN" "${BWRAP_ARGS[@]}" \
-        --ro-bind "$WRAPPER_SCRIPT" /tmp/wrapper.sh \
-        -- \
-        /tmp/wrapper.sh "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}" &
-
-    BWRAP_PID=$!
-
-    # Reduced delay for faster startup (namespace creation is usually instant)
-    sleep 0.05
-
-    # Attach slirp4netns to the sandbox
-    # Use --disable-host-loopback to prevent connections to 127.0.0.1 on the host
-    "$SLIRP4NETNS_BIN" --configure --mtu=65520 --disable-host-loopback "$BWRAP_PID" tap0 >/dev/null 2>&1 &
-    SLIRP_PID=$!
-
-    # Cleanup function
-    cleanup_slirp() {
-        kill "$SLIRP_PID" 2>/dev/null || true
-        kill "$BWRAP_PID" 2>/dev/null || true
-        wait "$SLIRP_PID" 2>/dev/null || true
-        wait "$BWRAP_PID" 2>/dev/null || true
-        rm -rf "$WRAPPER_SCRIPT" "$TEMP_RESOLV" "$TEMP_HOSTS"
-    }
-    trap cleanup_slirp EXIT INT TERM
-
-    # Bring bwrap back to foreground to restore TTY access
-    fg %1 1>/dev/null
-    EXIT_CODE=$?
-
-    # Cleanup
-    kill "$SLIRP_PID" 2>/dev/null || true
-    wait "$SLIRP_PID" 2>/dev/null || true
-
-    exit "$EXIT_CODE"
-else
-    # Execute directly without slirp4netns
-    exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
-fi
+# Execute Claude Code in sandbox
+exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
