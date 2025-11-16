@@ -11,12 +11,14 @@ NC='\033[0m' # No Color
 # Default configuration
 DEFAULT_WHITELIST_FILE="${CLAUDE_SANDBOX_WHITELIST:-$HOME/.config/claude-sandbox/whitelist.txt}"
 DEFAULT_BLACKLIST_FILE="${CLAUDE_SANDBOX_BLACKLIST:-$HOME/.config/claude-sandbox/blacklist.txt}"
+WORKING_DIR="$(pwd)"
+PROJECT_WHITELIST_FILE="$WORKING_DIR/.claude/whitelist.txt"
+PROJECT_BLACKLIST_FILE="$WORKING_DIR/.claude/blacklist.txt"
 WHITELIST_FILES=()
 BLACKLIST_FILES=()
 EXPLICIT_WHITELIST=false
 EXPLICIT_BLACKLIST=false
 QUIET=false
-WORKING_DIR="$(pwd)"
 
 # Print usage
 usage() {
@@ -27,14 +29,20 @@ Securely run Claude Code in a sandboxed environment using bubblewrap.
 
 OPTIONS:
     --whitelist FILE        Add whitelist file (can be specified multiple times)
-                           Default file is always included: $DEFAULT_WHITELIST_FILE
     --blacklist FILE        Add blacklist file (can be specified multiple times)
-                           Default file is always included: $DEFAULT_BLACKLIST_FILE
     --quiet, -q            Suppress informational output (faster startup)
     --verbose, -v          Show detailed output (default)
     -h, --help             Show this help message
 
-CONFIGURATION FILES:
+IMPLICIT CONFIGURATION FILES (automatically included if they exist):
+    1. User-level (always):
+       - $DEFAULT_WHITELIST_FILE
+       - $DEFAULT_BLACKLIST_FILE
+    2. Project-level (if present):
+       - .claude/whitelist.txt (in working directory)
+       - .claude/blacklist.txt (in working directory)
+
+CONFIGURATION FILE FORMAT:
     Whitelist: Contains absolute paths (one per line) that Claude can read
     Blacklist: Contains paths relative to working directory that Claude cannot access
 
@@ -194,6 +202,14 @@ if [[ -f "$DEFAULT_WHITELIST_FILE" ]]; then
 fi
 if [[ -f "$DEFAULT_BLACKLIST_FILE" ]]; then
     BLACKLIST_FILES=("$DEFAULT_BLACKLIST_FILE" "${BLACKLIST_FILES[@]}")
+fi
+
+# Include project-level files if they exist (after default, before explicit)
+if [[ -f "$PROJECT_WHITELIST_FILE" ]]; then
+    WHITELIST_FILES+=("$PROJECT_WHITELIST_FILE")
+fi
+if [[ -f "$PROJECT_BLACKLIST_FILE" ]]; then
+    BLACKLIST_FILES+=("$PROJECT_BLACKLIST_FILE")
 fi
 
 # Build bubblewrap arguments

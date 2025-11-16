@@ -14,10 +14,12 @@ This is a bash-based sandboxing solution for running Claude Code in isolated env
 - Single executable bash script that wraps Claude Code in a bubblewrap sandbox
 - Implements two-tier filesystem access control with **multi-file support**:
   1. **Whitelist**: Absolute system paths Claude can read
-     - Default: `~/.config/claude-sandbox/whitelist.txt` (always included)
+     - User-level: `~/.config/claude-sandbox/whitelist.txt` (always included, auto-generated)
+     - Project-level: `.claude/whitelist.txt` in working directory (included if exists)
      - Additional files via `--whitelist` flag (can be specified multiple times)
   2. **Blacklist**: Relative working directory paths Claude cannot access
-     - Default: `~/.config/claude-sandbox/blacklist.txt` (always included)
+     - User-level: `~/.config/claude-sandbox/blacklist.txt` (always included, auto-generated)
+     - Project-level: `.claude/blacklist.txt` in working directory (included if exists)
      - Additional files via `--blacklist` flag (can be specified multiple times)
 
 ### Key Design Patterns
@@ -35,12 +37,16 @@ This is a bash-based sandboxing solution for running Claude Code in isolated env
 - Binds system `/etc/resolv.conf` and `/etc/hosts` for DNS resolution
 
 **Configuration Resolution Order (Multi-File Support)**:
-1. **Default files** (always included if they exist):
+1. **User-level files** (always included if they exist):
    - `~/.config/claude-sandbox/whitelist.txt`
    - `~/.config/claude-sandbox/blacklist.txt`
    - Environment variables `CLAUDE_SANDBOX_WHITELIST` and `CLAUDE_SANDBOX_BLACKLIST` set the default file locations
-2. **Additional files** via `--whitelist` and `--blacklist` command-line arguments (can be specified multiple times)
-3. **Auto-generation**: Default files are created only if they don't exist **and** no explicit files were provided (lines 111-197)
+   - **Auto-generated** if they don't exist and no explicit files were provided (lines 111-191)
+2. **Project-level files** (automatically included if they exist, lines 201-207):
+   - `.claude/whitelist.txt` (in working directory)
+   - `.claude/blacklist.txt` (in working directory)
+   - **Never auto-generated** - create manually for project-specific rules
+3. **Additional files** via `--whitelist` and `--blacklist` command-line arguments (can be specified multiple times)
 4. All files are merged - paths from all whitelist files are allowed, patterns from all blacklist files are blocked
 
 **Bubblewrap Namespace Setup (lines 191-205)**:
@@ -117,21 +123,27 @@ shellcheck claude-code-sandbox.sh
 
 ### Configuration File Format
 
-**Whitelist** (absolute paths, lines 216-246):
+**Whitelist** (absolute paths, lines 224-254):
 - One path per line
 - Environment variable expansion supported: `$HOME` or `~`
 - Paths are validated before binding - non-existent paths are skipped
 - Comments start with `#`
 - Empty lines ignored
 - **Multi-file support**: All paths from all whitelist files are merged and allowed
+  - User-level: `~/.config/claude-sandbox/whitelist.txt`
+  - Project-level: `.claude/whitelist.txt` (if exists)
+  - Additional: via `--whitelist` flags
 
-**Blacklist** (relative paths, lines 254-289):
+**Blacklist** (relative paths, lines 262-297):
 - Paths relative to working directory
 - Glob patterns supported (`*`, `?`)
 - Patterns expanded using bash `compgen -G`
 - Comments start with `#`
 - Empty lines ignored
 - **Multi-file support**: All patterns from all blacklist files are merged and blocked
+  - User-level: `~/.config/claude-sandbox/blacklist.txt`
+  - Project-level: `.claude/blacklist.txt` (if exists)
+  - Additional: via `--blacklist` flags
 
 ## Modifying the Script
 
@@ -185,23 +197,33 @@ When adding mounts, remember:
 ## Testing Checklist
 
 When modifying the script:
-1. Test with non-existent default whitelist/blacklist files (should auto-generate)
-2. Test with explicit whitelist/blacklist files (should NOT auto-generate defaults)
-3. Test with multiple whitelist files (verify all paths are merged)
-4. Test with multiple blacklist files (verify all patterns are merged)
-5. Test with empty working directory
-6. Test with glob patterns in blacklist (`*.env`, `.secrets/*`)
-7. Test with environment variable expansion in whitelist (`$HOME/.local`, `~/.local`)
-8. Verify cleanup on clean exit and interrupt (Ctrl+C) - check for temp file leaks
-9. Test with missing additional files (should skip with warning, not fail)
-10. Test Claude Code can still access its config: check `~/.claude/` and `~/.claude.json`
-11. Verify configuration summary shows all whitelist/blacklist files being used
+1. Test with non-existent user-level whitelist/blacklist files (should auto-generate)
+2. Test with explicit whitelist/blacklist files (should NOT auto-generate user-level defaults)
+3. Test with project-level files (`.claude/whitelist.txt`, `.claude/blacklist.txt`) - verify they're included
+4. Test without project-level files (should work normally, no errors)
+5. Test with multiple whitelist files (verify all paths are merged)
+6. Test with multiple blacklist files (verify all patterns are merged)
+7. Test with empty working directory
+8. Test with glob patterns in blacklist (`*.env`, `.secrets/*`)
+9. Test with environment variable expansion in whitelist (`$HOME/.local`, `~/.local`)
+10. Verify cleanup on clean exit and interrupt (Ctrl+C) - check for temp file leaks
+11. Test with missing additional files (should skip with warning, not fail)
+12. Test Claude Code can still access its config: check `~/.claude/` and `~/.claude.json`
+13. Verify configuration summary shows all whitelist/blacklist files being used (user, project, and explicit)
 
 ## Files in Repository
 
-- `claude-code-sandbox.sh` - Main executable script (367 lines)
+- `claude-code-sandbox.sh` - Main executable script (383 lines)
 - `README.md` - User-facing documentation
 - `whitelist-example.txt` - Example whitelist configuration
 - `blacklist-example.txt` - Example blacklist configuration
 - `.gitignore` - Git ignore patterns
 - `CLAUDE.md` - Developer documentation (this file)
+
+## Project-Level Configuration
+
+Projects can include their own whitelist/blacklist files in the `.claude/` directory:
+- These files are automatically detected and used when present
+- They are never auto-generated
+- Ideal for version-controlled, team-shared configurations
+- Merged with user-level and explicit files

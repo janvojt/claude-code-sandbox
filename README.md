@@ -89,18 +89,23 @@ export CLAUDE_SANDBOX_BLACKLIST=/path/to/blacklist.txt
 
 The script supports **multiple whitelist and blacklist files**, which are processed in order:
 
-1. **Default files** (always included if they exist):
+1. **User-level files** (always included if they exist):
    - `~/.config/claude-sandbox/whitelist.txt`
    - `~/.config/claude-sandbox/blacklist.txt`
+   - **Auto-generated** if they don't exist and no explicit files are provided
 
-2. **Additional files** specified via `--whitelist` and `--blacklist` flags
+2. **Project-level files** (automatically included if they exist):
+   - `.claude/whitelist.txt` (in working directory)
+   - `.claude/blacklist.txt` (in working directory)
+   - **Never auto-generated** - create manually if needed
+
+3. **Additional files** specified via `--whitelist` and `--blacklist` flags
 
 All files are merged together, allowing you to:
-- Maintain a base configuration in the default files
-- Add project-specific rules via additional files
-- Share common configurations across multiple projects
-
-**Auto-generation:** Default files are only created automatically if they don't exist **and** no explicit files are provided via command-line flags.
+- Maintain a base configuration in user-level files
+- Add project-specific rules in `.claude/` directory (can be committed to version control)
+- Override with additional files via command-line flags
+- Share configurations across teams and projects
 
 ### Whitelist Format
 
@@ -223,27 +228,46 @@ If you genuinely need Claude to access a file that's blacklisted:
 
 ### Using multiple configuration files
 
-You can maintain a base configuration and add project-specific rules:
+You can maintain layered configurations at different levels:
 
 ```bash
-# ~/.config/claude-sandbox/whitelist.txt (base configuration)
+# Layer 1: User-level (~/.config/claude-sandbox/whitelist.txt)
 /usr/bin
 /usr/lib
 /usr/share
 
-# ~/projects/myproject/project-whitelist.txt (project-specific)
+# Layer 2: Project-level (.claude/whitelist.txt in your project)
 /opt/custom-compiler
-/home/user/shared-libs
+/home/user/project-specific-libs
 
-# Run with both configurations
-cd ~/projects/myproject
-claude-code-sandbox.sh --whitelist ./project-whitelist.txt
+# Layer 3: Additional files via command line
+claude-code-sandbox.sh --whitelist ./team-shared-whitelist.txt
+```
+
+**Using project-level files:**
+```bash
+# Create project-level configuration (can be committed to git)
+mkdir -p .claude
+cat > .claude/whitelist.txt << EOF
+/opt/project-tools
+/usr/lib/project-dependencies
+EOF
+
+cat > .claude/blacklist.txt << EOF
+.env.local
+secrets/
+*.key
+EOF
+
+# Now these files are automatically used when running in this directory
+claude-code-sandbox.sh
 ```
 
 This approach allows you to:
-- Keep common system paths in the default file
-- Add project-specific paths without modifying the default
-- Share project configurations via version control
+- Keep common system paths in user-level files
+- Add project-specific rules in `.claude/` (version controlled)
+- Share configurations across team members
+- Override with additional files when needed
 
 ### Java developer setup:
 ```bash
