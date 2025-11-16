@@ -56,10 +56,20 @@ nano ~/.config/claude-sandbox/blacklist.txt
 
 ### Custom whitelist/blacklist:
 ```bash
+# Single custom file (default file is still included)
 ./claude-code-sandbox.sh \
   --whitelist /path/to/my-whitelist.txt \
   --blacklist /path/to/my-blacklist.txt
+
+# Multiple whitelist/blacklist files
+./claude-code-sandbox.sh \
+  --whitelist ~/shared-whitelist.txt \
+  --whitelist ./project-whitelist.txt \
+  --blacklist ~/shared-blacklist.txt \
+  --blacklist ./project-blacklist.txt
 ```
+
+**Note:** The default whitelist and blacklist files (`~/.config/claude-sandbox/{whitelist,blacklist}.txt`) are always included automatically. Additional files specified via `--whitelist` and `--blacklist` are merged with the defaults.
 
 ### Pass arguments to Claude Code:
 ```bash
@@ -74,6 +84,23 @@ export CLAUDE_SANDBOX_BLACKLIST=/path/to/blacklist.txt
 ```
 
 ## Configuration
+
+### Multiple Configuration Files
+
+The script supports **multiple whitelist and blacklist files**, which are processed in order:
+
+1. **Default files** (always included if they exist):
+   - `~/.config/claude-sandbox/whitelist.txt`
+   - `~/.config/claude-sandbox/blacklist.txt`
+
+2. **Additional files** specified via `--whitelist` and `--blacklist` flags
+
+All files are merged together, allowing you to:
+- Maintain a base configuration in the default files
+- Add project-specific rules via additional files
+- Share common configurations across multiple projects
+
+**Auto-generation:** Default files are only created automatically if they don't exist **and** no explicit files are provided via command-line flags.
 
 ### Whitelist Format
 
@@ -92,10 +119,11 @@ The whitelist file contains **absolute paths** (one per line) that Claude can re
 /opt/company/shared-libraries
 ```
 
-**Important:** 
+**Important:**
 - Paths must be absolute (start with `/`)
 - Lines starting with `#` are ignored
 - Environment variables like `$HOME` are expanded
+- When using multiple whitelist files, all paths from all files are allowed
 
 ### Blacklist Format
 
@@ -120,6 +148,7 @@ The blacklist file contains **relative paths** from the working directory that C
 - Paths are relative to the working directory
 - Supports glob patterns (`*`, `?`)
 - Lines starting with `#` are ignored
+- When using multiple blacklist files, all patterns from all files are blocked
 
 ## Security Considerations
 
@@ -191,6 +220,30 @@ If you genuinely need Claude to access a file that's blacklisted:
 3. Use `--blacklist /dev/null` to disable blacklist (not recommended)
 
 ## Examples
+
+### Using multiple configuration files
+
+You can maintain a base configuration and add project-specific rules:
+
+```bash
+# ~/.config/claude-sandbox/whitelist.txt (base configuration)
+/usr/bin
+/usr/lib
+/usr/share
+
+# ~/projects/myproject/project-whitelist.txt (project-specific)
+/opt/custom-compiler
+/home/user/shared-libs
+
+# Run with both configurations
+cd ~/projects/myproject
+claude-code-sandbox.sh --whitelist ./project-whitelist.txt
+```
+
+This approach allows you to:
+- Keep common system paths in the default file
+- Add project-specific paths without modifying the default
+- Share project configurations via version control
 
 ### Java developer setup:
 ```bash

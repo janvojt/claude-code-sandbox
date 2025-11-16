@@ -12,12 +12,13 @@ This is a bash-based sandboxing solution for running Claude Code in isolated env
 
 **Main Script: `claude-code-sandbox.sh`**
 - Single executable bash script that wraps Claude Code in a bubblewrap sandbox
-- Implements two-tier filesystem access control:
-  1. **Whitelist**: Absolute system paths Claude can read (default: `~/.config/claude-sandbox/whitelist.txt`)
-  2. **Blacklist**: Relative working directory paths Claude cannot access (default: `~/.config/claude-sandbox/blacklist.txt`)
-- Network configuration:
-  - Full network access enabled (both local and internet)
-  - Uses `--share-net` to share host network namespace
+- Implements two-tier filesystem access control with **multi-file support**:
+  1. **Whitelist**: Absolute system paths Claude can read
+     - Default: `~/.config/claude-sandbox/whitelist.txt` (always included)
+     - Additional files via `--whitelist` flag (can be specified multiple times)
+  2. **Blacklist**: Relative working directory paths Claude cannot access
+     - Default: `~/.config/claude-sandbox/blacklist.txt` (always included)
+     - Additional files via `--blacklist` flag (can be specified multiple times)
 
 ### Key Design Patterns
 
@@ -33,11 +34,14 @@ This is a bash-based sandboxing solution for running Claude Code in isolated env
 - Uses `--share-net` to share host network namespace
 - Binds system `/etc/resolv.conf` and `/etc/hosts` for DNS resolution
 
-**Configuration Resolution Order**:
-1. Command-line arguments (`--whitelist`, `--blacklist`)
-2. Environment variables (`CLAUDE_SANDBOX_WHITELIST`, `CLAUDE_SANDBOX_BLACKLIST`)
-3. Default locations (`~/.config/claude-sandbox/{whitelist,blacklist}.txt`)
-4. Auto-generated defaults if files don't exist (lines 110-188)
+**Configuration Resolution Order (Multi-File Support)**:
+1. **Default files** (always included if they exist):
+   - `~/.config/claude-sandbox/whitelist.txt`
+   - `~/.config/claude-sandbox/blacklist.txt`
+   - Environment variables `CLAUDE_SANDBOX_WHITELIST` and `CLAUDE_SANDBOX_BLACKLIST` set the default file locations
+2. **Additional files** via `--whitelist` and `--blacklist` command-line arguments (can be specified multiple times)
+3. **Auto-generation**: Default files are created only if they don't exist **and** no explicit files were provided (lines 111-197)
+4. All files are merged - paths from all whitelist files are allowed, patterns from all blacklist files are blocked
 
 **Bubblewrap Namespace Setup (lines 191-205)**:
 - `--unshare-all` creates isolated namespaces (PID, IPC, UTS, cgroup, etc.) but network is shared
@@ -57,13 +61,20 @@ This is a bash-based sandboxing solution for running Claude Code in isolated env
 ### Testing the Script
 
 ```bash
-# Run in current directory with default settings (full network access)
+# Run in current directory with default settings
 ./claude-code-sandbox.sh
 
-# Test with custom configurations
+# Test with single additional whitelist/blacklist (defaults still included)
 ./claude-code-sandbox.sh \
   --whitelist ./whitelist-example.txt \
   --blacklist ./blacklist-example.txt
+
+# Test with multiple whitelist/blacklist files
+./claude-code-sandbox.sh \
+  --whitelist ~/shared-whitelist.txt \
+  --whitelist ./project-whitelist.txt \
+  --blacklist ~/shared-blacklist.txt \
+  --blacklist ./project-blacklist.txt
 
 # Pass arguments to underlying Claude Code
 ./claude-code-sandbox.sh -- --model claude-sonnet-4-5
@@ -88,42 +99,59 @@ shellcheck claude-code-sandbox.sh
 - The sandbox shares the host network namespace via `--share-net`
 - System DNS configuration is used for name resolution
 
-**Blacklist Implementation** (lines 236-262):
+**Blacklist Implementation** (lines 254-289):
+- **Multi-file processing**: Loops through all blacklist files in the array
 - Uses tmpfs mounts to hide paths (no file copying)
 - Glob patterns in blacklist are expanded at start time using `compgen -G`
 - Pattern matching happens against `$WORKING_DIR/$pattern`
 - Non-matching patterns generate warnings but don't fail
+- Missing blacklist files are skipped with warning (non-fatal)
 
-**Whitelist Implementation** (lines 208-224):
+**Whitelist Implementation** (lines 216-246):
+- **Multi-file processing**: Loops through all whitelist files in the array
 - Each path validated with `[[ -e "$path" ]]` before binding
-- Environment variable expansion (e.g., `$HOME`, `~`)
+- Environment variable expansion: `${line/#\~/$HOME}` and `${path//\$HOME/$HOME}`
 - Non-existent paths are skipped with warning, not errors
 - All whitelist paths bound read-only via `--ro-bind`
+- Missing whitelist files are skipped with warning, but at least one file must exist
 
 ### Configuration File Format
 
-**Whitelist** (absolute paths, lines 208-224):
+**Whitelist** (absolute paths, lines 216-246):
 - One path per line
 - Environment variable expansion supported: `$HOME` or `~`
 - Paths are validated before binding - non-existent paths are skipped
 - Comments start with `#`
 - Empty lines ignored
+- **Multi-file support**: All paths from all whitelist files are merged and allowed
 
-**Blacklist** (relative paths, lines 236-262):
+**Blacklist** (relative paths, lines 254-289):
 - Paths relative to working directory
 - Glob patterns supported (`*`, `?`)
 - Patterns expanded using bash `compgen -G`
 - Comments start with `#`
 - Empty lines ignored
+- **Multi-file support**: All patterns from all blacklist files are merged and blocked
 
 ## Modifying the Script
 
 ### Adding New Command-Line Options
 
-Options are parsed in the `while` loop at lines 48-76. Pattern:
+Options are parsed in the `while` loop at lines 51-86. Patterns:
+
+**Single-value option:**
 ```bash
 --your-option)
     YOUR_VAR="$2"
+    shift 2
+    ;;
+```
+
+**Multi-value option (array):**
+```bash
+--your-option)
+    YOUR_ARRAY+=("$2")
+    EXPLICIT_YOUR_OPTION=true
     shift 2
     ;;
 ```
@@ -157,18 +185,23 @@ When adding mounts, remember:
 ## Testing Checklist
 
 When modifying the script:
-1. Test with non-existent whitelist/blacklist files (should auto-generate)
-2. Test with empty working directory
-3. Test with glob patterns in blacklist (`*.env`, `.secrets/*`)
-4. Test with environment variable expansion in whitelist (`$HOME/.local`)
-5. Verify cleanup on clean exit and interrupt (Ctrl+C)
-6. Test network access (both local and internet should work)
-7. Test Claude Code can still access its config: check `~/.claude/` and `~/.claude.json`
+1. Test with non-existent default whitelist/blacklist files (should auto-generate)
+2. Test with explicit whitelist/blacklist files (should NOT auto-generate defaults)
+3. Test with multiple whitelist files (verify all paths are merged)
+4. Test with multiple blacklist files (verify all patterns are merged)
+5. Test with empty working directory
+6. Test with glob patterns in blacklist (`*.env`, `.secrets/*`)
+7. Test with environment variable expansion in whitelist (`$HOME/.local`, `~/.local`)
+8. Verify cleanup on clean exit and interrupt (Ctrl+C) - check for temp file leaks
+9. Test with missing additional files (should skip with warning, not fail)
+10. Test Claude Code can still access its config: check `~/.claude/` and `~/.claude.json`
+11. Verify configuration summary shows all whitelist/blacklist files being used
 
 ## Files in Repository
 
-- `claude-code-sandbox.sh` - Main executable script (~327 lines)
+- `claude-code-sandbox.sh` - Main executable script (367 lines)
 - `README.md` - User-facing documentation
 - `whitelist-example.txt` - Example whitelist configuration
 - `blacklist-example.txt` - Example blacklist configuration
 - `.gitignore` - Git ignore patterns
+- `CLAUDE.md` - Developer documentation (this file)

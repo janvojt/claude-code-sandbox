@@ -9,8 +9,12 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Default configuration
-WHITELIST_FILE="${CLAUDE_SANDBOX_WHITELIST:-$HOME/.config/claude-sandbox/whitelist.txt}"
-BLACKLIST_FILE="${CLAUDE_SANDBOX_BLACKLIST:-$HOME/.config/claude-sandbox/blacklist.txt}"
+DEFAULT_WHITELIST_FILE="${CLAUDE_SANDBOX_WHITELIST:-$HOME/.config/claude-sandbox/whitelist.txt}"
+DEFAULT_BLACKLIST_FILE="${CLAUDE_SANDBOX_BLACKLIST:-$HOME/.config/claude-sandbox/blacklist.txt}"
+WHITELIST_FILES=()
+BLACKLIST_FILES=()
+EXPLICIT_WHITELIST=false
+EXPLICIT_BLACKLIST=false
 QUIET=false
 WORKING_DIR="$(pwd)"
 
@@ -22,8 +26,10 @@ Usage: $0 [OPTIONS] [-- CLAUDE_ARGS...]
 Securely run Claude Code in a sandboxed environment using bubblewrap.
 
 OPTIONS:
-    --whitelist FILE        Path to whitelist file (default: $WHITELIST_FILE)
-    --blacklist FILE        Path to blacklist file (default: $BLACKLIST_FILE)
+    --whitelist FILE        Add whitelist file (can be specified multiple times)
+                           Default file is always included: $DEFAULT_WHITELIST_FILE
+    --blacklist FILE        Add blacklist file (can be specified multiple times)
+                           Default file is always included: $DEFAULT_BLACKLIST_FILE
     --quiet, -q            Suppress informational output (faster startup)
     --verbose, -v          Show detailed output (default)
     -h, --help             Show this help message
@@ -35,6 +41,7 @@ CONFIGURATION FILES:
 EXAMPLES:
     $0
     $0 --whitelist /path/to/custom-whitelist.txt
+    $0 --whitelist file1.txt --whitelist file2.txt
     $0 -- --model claude-sonnet-4-5
 
 EOF
@@ -46,11 +53,13 @@ CLAUDE_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --whitelist)
-            WHITELIST_FILE="$2"
+            WHITELIST_FILES+=("$2")
+            EXPLICIT_WHITELIST=true
             shift 2
             ;;
         --blacklist)
-            BLACKLIST_FILE="$2"
+            BLACKLIST_FILES+=("$2")
+            EXPLICIT_BLACKLIST=true
             shift 2
             ;;
         --quiet|-q)
@@ -99,12 +108,12 @@ if [[ -z "$CLAUDE_BIN" ]]; then
     exit 1
 fi
 
-# Create default whitelist if it doesn't exist
-if [[ ! -f "$WHITELIST_FILE" ]]; then
-    echo -e "${YELLOW}Warning: Whitelist file not found at $WHITELIST_FILE${NC}" >&2
+# Create default whitelist if it doesn't exist and no explicit whitelist was given
+if [[ ! -f "$DEFAULT_WHITELIST_FILE" ]] && [[ "$EXPLICIT_WHITELIST" = false ]]; then
+    echo -e "${YELLOW}Warning: Whitelist file not found at $DEFAULT_WHITELIST_FILE${NC}" >&2
     echo -e "${YELLOW}Creating default whitelist...${NC}" >&2
-    mkdir -p "$(dirname "$WHITELIST_FILE")"
-    cat > "$WHITELIST_FILE" << 'EOWHITELIST'
+    mkdir -p "$(dirname "$DEFAULT_WHITELIST_FILE")"
+    cat > "$DEFAULT_WHITELIST_FILE" << 'EOWHITELIST'
 # Claude Code Sandbox Whitelist
 # Add absolute paths (one per line) that Claude should be able to read
 # Lines starting with # are ignored
@@ -131,16 +140,16 @@ if [[ ! -f "$WHITELIST_FILE" ]]; then
 /etc/ssl/certs
 
 EOWHITELIST
-    echo -e "${GREEN}Created default whitelist at $WHITELIST_FILE${NC}" >&2
+    echo -e "${GREEN}Created default whitelist at $DEFAULT_WHITELIST_FILE${NC}" >&2
     echo -e "${YELLOW}Please review and customize it for your needs${NC}" >&2
 fi
 
-# Create default blacklist if it doesn't exist
-if [[ ! -f "$BLACKLIST_FILE" ]]; then
-    echo -e "${YELLOW}Warning: Blacklist file not found at $BLACKLIST_FILE${NC}" >&2
+# Create default blacklist if it doesn't exist and no explicit blacklist was given
+if [[ ! -f "$DEFAULT_BLACKLIST_FILE" ]] && [[ "$EXPLICIT_BLACKLIST" = false ]]; then
+    echo -e "${YELLOW}Warning: Blacklist file not found at $DEFAULT_BLACKLIST_FILE${NC}" >&2
     echo -e "${YELLOW}Creating default blacklist...${NC}" >&2
-    mkdir -p "$(dirname "$BLACKLIST_FILE")"
-    cat > "$BLACKLIST_FILE" << 'EOBLACKLIST'
+    mkdir -p "$(dirname "$DEFAULT_BLACKLIST_FILE")"
+    cat > "$DEFAULT_BLACKLIST_FILE" << 'EOBLACKLIST'
 # Claude Code Sandbox Blacklist
 # Add paths relative to working directory that Claude should NOT access
 # Lines starting with # are ignored
@@ -175,8 +184,16 @@ docker-compose.override.yml
 .vault_password
 
 EOBLACKLIST
-    echo -e "${GREEN}Created default blacklist at $BLACKLIST_FILE${NC}" >&2
+    echo -e "${GREEN}Created default blacklist at $DEFAULT_BLACKLIST_FILE${NC}" >&2
     echo -e "${YELLOW}Please review and customize it for your needs${NC}" >&2
+fi
+
+# Always include default files in the arrays (at the beginning)
+if [[ -f "$DEFAULT_WHITELIST_FILE" ]]; then
+    WHITELIST_FILES=("$DEFAULT_WHITELIST_FILE" "${WHITELIST_FILES[@]}")
+fi
+if [[ -f "$DEFAULT_BLACKLIST_FILE" ]]; then
+    BLACKLIST_FILES=("$DEFAULT_BLACKLIST_FILE" "${BLACKLIST_FILES[@]}")
 fi
 
 # Build bubblewrap arguments
@@ -196,8 +213,20 @@ BWRAP_ARGS=(
     --ro-bind /sys /sys
 )
 
-# Process whitelist and add to bubblewrap
-if [[ -f "$WHITELIST_FILE" ]]; then
+# Process all whitelist files and add to bubblewrap
+if [[ ${#WHITELIST_FILES[@]} -eq 0 ]]; then
+    echo -e "${RED}Error: No whitelist files found${NC}" >&2
+    exit 1
+fi
+
+for WHITELIST_FILE in "${WHITELIST_FILES[@]}"; do
+    if [[ ! -f "$WHITELIST_FILE" ]]; then
+        echo -e "${YELLOW}Warning: Whitelist file not found: $WHITELIST_FILE (skipping)${NC}" >&2
+        continue
+    fi
+
+    log_info "${GREEN}Processing whitelist:${NC} $WHITELIST_FILE"
+
     while IFS= read -r line || [[ -n "$line" ]]; do
         # Skip comments and empty lines
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
@@ -214,10 +243,7 @@ if [[ -f "$WHITELIST_FILE" ]]; then
             log_info "${YELLOW}⚠${NC} Skipping non-existent path: $path"
         fi
     done < "$WHITELIST_FILE"
-else
-    echo -e "${RED}Error: Whitelist file not found: $WHITELIST_FILE${NC}" >&2
-    exit 1
-fi
+done
 
 # Setup minimal home directory using tmpfs
 BWRAP_ARGS+=(--tmpfs "$HOME")
@@ -225,32 +251,41 @@ BWRAP_ARGS+=(--tmpfs "$HOME")
 # Bind working directory (after tmpfs home, so it's visible)
 BWRAP_ARGS+=(--bind "$WORKING_DIR" "$WORKING_DIR")
 
-# Process blacklist patterns and hide them with tmpfs overlays
-if [[ -f "$BLACKLIST_FILE" ]]; then
+# Process all blacklist files and hide patterns with tmpfs overlays
+if [[ ${#BLACKLIST_FILES[@]} -gt 0 ]]; then
     log_info "\n${YELLOW}Processing blacklist patterns:${NC}"
-    while IFS= read -r pattern || [[ -n "$pattern" ]]; do
-        [[ "$pattern" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${pattern// }" ]] && continue
-
-        # Find matching files/directories in working directory
-        if compgen -G "$WORKING_DIR/$pattern" > /dev/null 2>&1; then
-            for match in "$WORKING_DIR"/$pattern; do
-                if [[ -e "$match" ]]; then
-                    if [[ -d "$match" ]]; then
-                        # Hide directories with tmpfs overlay
-                        BWRAP_ARGS+=(--tmpfs "$match")
-                        log_info "${RED}✗${NC} Blacklisted (dir): ${match#$WORKING_DIR/}"
-                    else
-                        # Hide files by binding /dev/null over them
-                        BWRAP_ARGS+=(--ro-bind /dev/null "$match")
-                        log_info "${RED}✗${NC} Blacklisted (file): ${match#$WORKING_DIR/}"
-                    fi
-                fi
-            done
-        else
-            log_info "${YELLOW}⚠${NC} No matches for pattern: $pattern"
+    for BLACKLIST_FILE in "${BLACKLIST_FILES[@]}"; do
+        if [[ ! -f "$BLACKLIST_FILE" ]]; then
+            log_info "${YELLOW}Warning: Blacklist file not found: $BLACKLIST_FILE (skipping)${NC}"
+            continue
         fi
-    done < "$BLACKLIST_FILE"
+
+        log_info "${YELLOW}Processing blacklist:${NC} $BLACKLIST_FILE"
+
+        while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+            [[ "$pattern" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${pattern// }" ]] && continue
+
+            # Find matching files/directories in working directory
+            if compgen -G "$WORKING_DIR/$pattern" > /dev/null 2>&1; then
+                for match in "$WORKING_DIR"/$pattern; do
+                    if [[ -e "$match" ]]; then
+                        if [[ -d "$match" ]]; then
+                            # Hide directories with tmpfs overlay
+                            BWRAP_ARGS+=(--tmpfs "$match")
+                            log_info "${RED}✗${NC} Blacklisted (dir): ${match#$WORKING_DIR/}"
+                        else
+                            # Hide files by binding /dev/null over them
+                            BWRAP_ARGS+=(--ro-bind /dev/null "$match")
+                            log_info "${RED}✗${NC} Blacklisted (file): ${match#$WORKING_DIR/}"
+                        fi
+                    fi
+                done
+            else
+                log_info "${YELLOW}⚠${NC} No matches for pattern: $pattern"
+            fi
+        done < "$BLACKLIST_FILE"
+    done
 fi
 
 # Bind claude binary
@@ -318,8 +353,14 @@ fi
 # Display configuration summary
 log_info "\n${GREEN}=== Claude Code Sandbox Configuration ===${NC}"
 log_info "Working Directory: ${YELLOW}$WORKING_DIR${NC}"
-log_info "Whitelist File: ${YELLOW}$WHITELIST_FILE${NC}"
-log_info "Blacklist File: ${YELLOW}$BLACKLIST_FILE${NC}"
+log_info "Whitelist Files (${#WHITELIST_FILES[@]}):"
+for wfile in "${WHITELIST_FILES[@]}"; do
+    log_info "  ${YELLOW}$wfile${NC}"
+done
+log_info "Blacklist Files (${#BLACKLIST_FILES[@]}):"
+for bfile in "${BLACKLIST_FILES[@]}"; do
+    log_info "  ${YELLOW}$bfile${NC}"
+done
 log_info "${GREEN}=========================================${NC}\n"
 
 # Execute Claude Code in sandbox
