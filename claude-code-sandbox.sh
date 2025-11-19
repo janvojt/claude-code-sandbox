@@ -242,7 +242,13 @@ BWRAP_ARGS=(
     --ro-bind /sys /sys
 )
 
-# Process all whitelist files and add to bubblewrap
+# Setup minimal home directory using tmpfs
+BWRAP_ARGS+=(--tmpfs "$HOME")
+
+# Bind working directory (after tmpfs home, so it's visible)
+BWRAP_ARGS+=(--bind "$WORKING_DIR" "$WORKING_DIR")
+
+# Process all whitelist files and add to bubblewrap (after tmpfs so HOME paths work)
 if [[ ${#WHITELIST_FILES[@]} -eq 0 ]]; then
     echo -e "${RED}Error: No whitelist files found${NC}" >&2
     exit 1
@@ -309,12 +315,6 @@ for WHITELIST_FILE in "${WHITELIST_FILES[@]}"; do
         fi
     done < "$WHITELIST_FILE"
 done
-
-# Setup minimal home directory using tmpfs
-BWRAP_ARGS+=(--tmpfs "$HOME")
-
-# Bind working directory (after tmpfs home, so it's visible)
-BWRAP_ARGS+=(--bind "$WORKING_DIR" "$WORKING_DIR")
 
 # Process all blacklist files and hide patterns with tmpfs overlays
 if [[ ${#BLACKLIST_FILES[@]} -gt 0 ]]; then
