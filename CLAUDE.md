@@ -123,10 +123,12 @@ shellcheck claude-code-sandbox.sh
 
 ### Configuration File Format
 
-**Whitelist** (absolute paths, lines 224-254):
-- One path per line
+**Whitelist** (absolute paths or glob patterns, lines 246-277):
+- One path or pattern per line
 - Environment variable expansion supported: `$HOME` or `~`
-- Paths are validated before binding - non-existent paths are skipped
+- **Glob pattern support**: Use `*`, `?`, `[]` for pattern matching (e.g., `/etc/java*`)
+- Patterns are expanded at sandbox start time using bash glob expansion
+- Literal paths are validated before binding - non-existent paths are skipped
 - Comments start with `#`
 - Empty lines ignored
 - **Multi-file support**: All paths from all whitelist files are merged and allowed

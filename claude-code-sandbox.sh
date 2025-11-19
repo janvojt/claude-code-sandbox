@@ -43,7 +43,8 @@ IMPLICIT CONFIGURATION FILES (automatically included if they exist):
        - .claude/blacklist.txt (in working directory)
 
 CONFIGURATION FILE FORMAT:
-    Whitelist: Contains absolute paths (one per line) that Claude can read
+    Whitelist: Contains absolute paths or glob patterns (one per line) that Claude can read
+               Supports glob patterns: /etc/java* will expand to all matching paths
     Blacklist: Contains paths relative to working directory that Claude cannot access
 
 EXAMPLES:
@@ -139,9 +140,6 @@ if [[ ! -f "$DEFAULT_WHITELIST_FILE" ]] && [[ "$EXPLICIT_WHITELIST" = false ]]; 
 # Common development tools locations
 /usr/local/bin
 /usr/local/lib
-
-# Node.js (if installed via package manager)
-/usr/lib/node_modules
 
 # System configuration that's generally safe
 /etc/alternatives
@@ -252,11 +250,27 @@ for WHITELIST_FILE in "${WHITELIST_FILES[@]}"; do
         path="${line/#\~/$HOME}"
         path="${path//\$HOME/$HOME}"
 
-        if [[ -e "$path" ]]; then
-            BWRAP_ARGS+=(--ro-bind "$path" "$path")
-            log_info "${GREEN}✓${NC} Whitelisted: $path"
+        # Check if path contains glob characters
+        if [[ "$path" =~ [\*\?\[] ]]; then
+            # Expand glob pattern
+            if compgen -G "$path" > /dev/null 2>&1; then
+                for match in $path; do
+                    if [[ -e "$match" ]]; then
+                        BWRAP_ARGS+=(--ro-bind "$match" "$match")
+                        log_info "${GREEN}✓${NC} Whitelisted: $match"
+                    fi
+                done
+            else
+                log_info "${YELLOW}⚠${NC} No matches for pattern: $path"
+            fi
         else
-            log_info "${YELLOW}⚠${NC} Skipping non-existent path: $path"
+            # Literal path (no glob)
+            if [[ -e "$path" ]]; then
+                BWRAP_ARGS+=(--ro-bind "$path" "$path")
+                log_info "${GREEN}✓${NC} Whitelisted: $path"
+            else
+                log_info "${YELLOW}⚠${NC} Skipping non-existent path: $path"
+            fi
         fi
     done < "$WHITELIST_FILE"
 done

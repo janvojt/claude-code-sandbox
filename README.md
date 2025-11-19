@@ -109,15 +109,16 @@ All files are merged together, allowing you to:
 
 ### Whitelist Format
 
-The whitelist file contains **absolute paths** (one per line) that Claude can read:
+The whitelist file contains **absolute paths or glob patterns** (one per line) that Claude can read:
 
 ```
 # System binaries
 /usr/bin
 /usr/lib
 
-# Java tools (for Java developers)
+# Java tools (for Java developers) - using glob patterns
 /usr/lib/jvm
+/etc/java*
 /opt/maven
 
 # Your custom paths
@@ -126,6 +127,7 @@ The whitelist file contains **absolute paths** (one per line) that Claude can re
 
 **Important:**
 - Paths must be absolute (start with `/`)
+- **Glob patterns supported**: Use `*`, `?`, `[]` for pattern matching (e.g., `/etc/java*` expands to all matching directories)
 - Lines starting with `#` are ignored
 - Environment variables like `$HOME` are expanded
 - When using multiple whitelist files, all paths from all files are allowed
@@ -272,11 +274,9 @@ This approach allows you to:
 ### Java developer setup:
 ```bash
 # whitelist.txt
-/usr/bin
-/usr/lib
-/usr/lib/jvm
-/opt/maven
-/opt/gradle
+# Java tools
+/etc/java*
+/etc/maven
 ~/.m2/repository  # Maven cache (read-only)
 
 # blacklist.txt
@@ -288,8 +288,7 @@ keystore.jks
 ### DevOps/Ansible setup:
 ```bash
 # whitelist.txt
-/usr/bin
-/usr/lib
+# DevOps tools
 /usr/share/ansible
 /etc/ansible
 /opt/ansible
@@ -302,22 +301,6 @@ inventory/production
 .ssh
 *.pem
 ```
-
-### Docker development:
-```bash
-# Full network access is enabled by default
-./claude-code-sandbox.sh
-
-# blacklist.txt
-.env
-.env.production
-docker-compose.override.yml
-secrets/
-```
-
-## License
-
-This script is provided as-is for security-conscious Claude Code users. Modify as needed for your use case.
 
 ## Contributing
 
