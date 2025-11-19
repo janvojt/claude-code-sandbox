@@ -99,6 +99,19 @@ log_info() {
     [[ "$QUIET" = false ]] && echo -e "$@" >&2
 }
 
+# Strip inline comments and trim whitespace from a line
+# Usage: result=$(strip_inline_comment "$line")
+strip_inline_comment() {
+    local line="$1"
+    # Strip inline comments (anything after #)
+    line="${line%%#*}"
+    # Trim leading whitespace
+    line="${line#"${line%%[![:space:]]*}"}"
+    # Trim trailing whitespace
+    line="${line%"${line##*[![:space:]]}"}"
+    echo "$line"
+}
+
 # Cache command availability checks
 BWRAP_BIN=$(command -v bwrap 2>/dev/null)
 CLAUDE_BIN=$(command -v claude 2>/dev/null)
@@ -246,6 +259,9 @@ for WHITELIST_FILE in "${WHITELIST_FILES[@]}"; do
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         [[ -z "${line// }" ]] && continue
 
+        line=$(strip_inline_comment "$line")
+        [[ -z "$line" ]] && continue
+
         # Expand environment variables without eval (faster)
         path="${line/#\~/$HOME}"
         path="${path//\$HOME/$HOME}"
@@ -295,6 +311,9 @@ if [[ ${#BLACKLIST_FILES[@]} -gt 0 ]]; then
         while IFS= read -r pattern || [[ -n "$pattern" ]]; do
             [[ "$pattern" =~ ^[[:space:]]*# ]] && continue
             [[ -z "${pattern// }" ]] && continue
+
+            pattern=$(strip_inline_comment "$pattern")
+            [[ -z "$pattern" ]] && continue
 
             # Find matching files/directories in working directory
             if compgen -G "$WORKING_DIR/$pattern" > /dev/null 2>&1; then
