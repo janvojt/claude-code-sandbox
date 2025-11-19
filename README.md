@@ -112,21 +112,31 @@ All files are merged together, allowing you to:
 The whitelist file contains **absolute paths or glob patterns** (one per line) that Claude can read:
 
 ```
-# System binaries
+# System binaries (read-only by default)
 /usr/bin
 /usr/lib
 
 # Java tools (for Java developers) - using glob patterns
 /usr/lib/jvm
 /etc/java*
-/opt/maven
+/etc/maven
 
-# Your custom paths
-/opt/company/shared-libraries
+# Maven cache with read-write access
+~/.m2/repository:rw
+
+# Custom paths with read-write for specific directory
+/opt/company/shared-cache:rw
+
+# Glob pattern with read-write
+/opt/build-*:rw
 ```
 
 **Important:**
 - Paths must be absolute (start with `/`)
+- **Read-write access**: Suffix a path with `:rw` to mount it read-write (e.g., `/path/to/dir:rw`)
+  - Default: all paths are mounted read-only (safer)
+  - Use `:rw` only for paths where Claude needs write access (caches, build outputs, etc.)
+  - Works with both literal paths and glob patterns (e.g., `/opt/cache-*:rw`)
 - **Glob patterns supported**: Use `*`, `?`, `[]` for pattern matching (e.g., `/etc/java*` expands to all matching directories)
 - Lines starting with `#` are ignored
 - Environment variables like `$HOME` are expanded
@@ -277,7 +287,7 @@ This approach allows you to:
 # Java tools
 /etc/java*
 /etc/maven
-~/.m2/repository  # Maven cache (read-only)
+~/.m2/repository:rw  # Maven cache (read-write so Claude can download dependencies)
 
 # blacklist.txt
 .env

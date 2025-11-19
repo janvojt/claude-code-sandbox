@@ -44,6 +44,8 @@ IMPLICIT CONFIGURATION FILES (automatically included if they exist):
 
 CONFIGURATION FILE FORMAT:
     Whitelist: Contains absolute paths or glob patterns (one per line) that Claude can read
+               Default: read-only bind mount
+               Suffix with :rw for read-write bind (e.g., /path/to/dir:rw or /path/*:rw)
                Supports glob patterns: /etc/java* will expand to all matching paths
     Blacklist: Contains paths relative to working directory that Claude cannot access
 
@@ -262,6 +264,13 @@ for WHITELIST_FILE in "${WHITELIST_FILES[@]}"; do
         line=$(strip_inline_comment "$line")
         [[ -z "$line" ]] && continue
 
+        # Check for read-write suffix (:rw)
+        bind_mode="ro"
+        if [[ "$line" =~ :rw$ ]]; then
+            bind_mode="rw"
+            line="${line%:rw}"  # Strip :rw suffix
+        fi
+
         # Expand environment variables without eval (faster)
         path="${line/#\~/$HOME}"
         path="${path//\$HOME/$HOME}"
@@ -272,8 +281,13 @@ for WHITELIST_FILE in "${WHITELIST_FILES[@]}"; do
             if compgen -G "$path" > /dev/null 2>&1; then
                 for match in $path; do
                     if [[ -e "$match" ]]; then
-                        BWRAP_ARGS+=(--ro-bind "$match" "$match")
-                        log_info "${GREEN}✓${NC} Whitelisted: $match"
+                        if [[ "$bind_mode" = "rw" ]]; then
+                            BWRAP_ARGS+=(--bind "$match" "$match")
+                            log_info "${GREEN}✓${NC} Whitelisted (rw): $match"
+                        else
+                            BWRAP_ARGS+=(--ro-bind "$match" "$match")
+                            log_info "${GREEN}✓${NC} Whitelisted: $match"
+                        fi
                     fi
                 done
             else
@@ -282,8 +296,13 @@ for WHITELIST_FILE in "${WHITELIST_FILES[@]}"; do
         else
             # Literal path (no glob)
             if [[ -e "$path" ]]; then
-                BWRAP_ARGS+=(--ro-bind "$path" "$path")
-                log_info "${GREEN}✓${NC} Whitelisted: $path"
+                if [[ "$bind_mode" = "rw" ]]; then
+                    BWRAP_ARGS+=(--bind "$path" "$path")
+                    log_info "${GREEN}✓${NC} Whitelisted (rw): $path"
+                else
+                    BWRAP_ARGS+=(--ro-bind "$path" "$path")
+                    log_info "${GREEN}✓${NC} Whitelisted: $path"
+                fi
             else
                 log_info "${YELLOW}⚠${NC} Skipping non-existent path: $path"
             fi
