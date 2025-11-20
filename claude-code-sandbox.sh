@@ -19,6 +19,7 @@ BLACKLIST_FILES=()
 EXPLICIT_WHITELIST=false
 EXPLICIT_BLACKLIST=false
 QUIET=false
+DRY_RUN=false
 
 # Print usage
 usage() {
@@ -30,6 +31,7 @@ Securely run Claude Code in a sandboxed environment using bubblewrap.
 OPTIONS:
     --whitelist FILE        Add whitelist file (can be specified multiple times)
     --blacklist FILE        Add blacklist file (can be specified multiple times)
+    --dry-run              Start bash shell instead of Claude Code (for testing)
     --quiet, -q            Suppress informational output (faster startup)
     --verbose, -v          Show detailed output (default)
     -h, --help             Show this help message
@@ -72,6 +74,10 @@ while [[ $# -gt 0 ]]; do
             BLACKLIST_FILES+=("$2")
             EXPLICIT_BLACKLIST=true
             shift 2
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
             ;;
         --quiet|-q)
             QUIET=true
@@ -431,5 +437,10 @@ for bfile in "${BLACKLIST_FILES[@]}"; do
 done
 log_info "${GREEN}=========================================${NC}\n"
 
-# Execute Claude Code in sandbox
-exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
+# Execute Claude Code or bash (for dry-run) in sandbox
+if [[ "$DRY_RUN" = true ]]; then
+    log_info "${YELLOW}=== DRY RUN MODE: Starting bash shell in sandbox ===${NC}\n"
+    exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- /bin/bash
+else
+    exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
+fi
