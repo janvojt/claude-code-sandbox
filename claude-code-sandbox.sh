@@ -16,6 +16,9 @@ PROJECT_WHITELIST_FILE="$WORKING_DIR/.claude/whitelist.txt"
 PROJECT_BLACKLIST_FILE="$WORKING_DIR/.claude/blacklist.txt"
 WHITELIST_FILES=()
 BLACKLIST_FILES=()
+WHITELIST_PATHS_RO=()
+WHITELIST_PATHS_RW=()
+BLACKLIST_PATHS=()
 EXPLICIT_WHITELIST=false
 EXPLICIT_BLACKLIST=false
 QUIET=false
@@ -31,6 +34,9 @@ Securely run Claude Code in a sandboxed environment using bubblewrap.
 OPTIONS:
     --whitelist FILE        Add whitelist file (can be specified multiple times)
     --blacklist FILE        Add blacklist file (can be specified multiple times)
+    --whitelist-path PATH   Directly whitelist a path (read-only, can be specified multiple times)
+    --whitelist-path-rw PATH Directly whitelist a path (read-write, can be specified multiple times)
+    --blacklist-path PATH   Directly blacklist a path (relative to working dir, can be specified multiple times)
     --dry-run              Start bash shell instead of Claude Code (for testing)
     --quiet, -q            Suppress informational output (faster startup)
     --verbose, -v          Show detailed output (default)
@@ -55,6 +61,9 @@ EXAMPLES:
     $0
     $0 --whitelist /path/to/custom-whitelist.txt
     $0 --whitelist file1.txt --whitelist file2.txt
+    $0 --whitelist-path /var/run/docker.sock
+    $0 --whitelist-path-rw /shared/data
+    $0 --blacklist-path .env --blacklist-path secrets/
     $0 -- --model claude-sonnet-4-5
 
 EOF
@@ -73,6 +82,21 @@ while [[ $# -gt 0 ]]; do
         --blacklist)
             BLACKLIST_FILES+=("$2")
             EXPLICIT_BLACKLIST=true
+            shift 2
+            ;;
+        --blacklist-path)
+            BLACKLIST_PATHS+=("$2")
+            EXPLICIT_BLACKLIST=true
+            shift 2
+            ;;
+        --whitelist-path)
+            WHITELIST_PATHS_RO+=("$2")
+            EXPLICIT_WHITELIST=true
+            shift 2
+            ;;
+        --whitelist-path-rw)
+            WHITELIST_PATHS_RW+=("$2")
+            EXPLICIT_WHITELIST=true
             shift 2
             ;;
         --dry-run)
@@ -118,6 +142,76 @@ strip_inline_comment() {
     # Trim trailing whitespace
     line="${line%"${line##*[![:space:]]}"}"
     echo "$line"
+}
+
+# Whitelist a single path (with glob expansion support)
+# Usage: whitelist_path <path> <bind_mode>
+# bind_mode: "ro" for read-only, "rw" for read-write
+whitelist_path() {
+    local path="$1"
+    local bind_mode="$2"
+
+    # Expand environment variables without eval (faster)
+    path="${path/#\~/$HOME}"
+    path="${path//\$HOME/$HOME}"
+
+    # Check if path contains glob characters
+    if [[ "$path" =~ [\*\?\[] ]]; then
+        # Expand glob pattern
+        if compgen -G "$path" > /dev/null 2>&1; then
+            for match in $path; do
+                if [[ -e "$match" ]]; then
+                    if [[ "$bind_mode" = "rw" ]]; then
+                        BWRAP_ARGS+=(--bind "$match" "$match")
+                        log_info "${GREEN}✓${NC} Whitelisted (rw): $match"
+                    else
+                        BWRAP_ARGS+=(--ro-bind "$match" "$match")
+                        log_info "${GREEN}✓${NC} Whitelisted: $match"
+                    fi
+                fi
+            done
+        else
+            log_info "${YELLOW}⚠${NC} No matches for pattern: $path"
+        fi
+    else
+        # Literal path (no glob)
+        if [[ -e "$path" ]]; then
+            if [[ "$bind_mode" = "rw" ]]; then
+                BWRAP_ARGS+=(--bind "$path" "$path")
+                log_info "${GREEN}✓${NC} Whitelisted (rw): $path"
+            else
+                BWRAP_ARGS+=(--ro-bind "$path" "$path")
+                log_info "${GREEN}✓${NC} Whitelisted: $path"
+            fi
+        else
+            log_info "${YELLOW}⚠${NC} Skipping non-existent path: $path"
+        fi
+    fi
+}
+
+# Blacklist a single pattern (relative to working directory)
+# Usage: blacklist_pattern <pattern>
+blacklist_pattern() {
+    local pattern="$1"
+
+    # Find matching files/directories in working directory
+    if compgen -G "$WORKING_DIR/$pattern" > /dev/null 2>&1; then
+        for match in "$WORKING_DIR"/$pattern; do
+            if [[ -e "$match" ]]; then
+                if [[ -d "$match" ]]; then
+                    # Hide directories with tmpfs overlay
+                    BWRAP_ARGS+=(--tmpfs "$match")
+                    log_info "${RED}✗${NC} Blacklisted (dir): ${match#$WORKING_DIR/}"
+                else
+                    # Hide files by binding /dev/null over them
+                    BWRAP_ARGS+=(--ro-bind /dev/null "$match")
+                    log_info "${RED}✗${NC} Blacklisted (file): ${match#$WORKING_DIR/}"
+                fi
+            fi
+        done
+    else
+        log_info "${YELLOW}⚠${NC} No matches for pattern: $pattern"
+    fi
 }
 
 # Cache command availability checks
@@ -283,44 +377,26 @@ for WHITELIST_FILE in "${WHITELIST_FILES[@]}"; do
             line="${line%:rw}"  # Strip :rw suffix
         fi
 
-        # Expand environment variables without eval (faster)
-        path="${line/#\~/$HOME}"
-        path="${path//\$HOME/$HOME}"
-
-        # Check if path contains glob characters
-        if [[ "$path" =~ [\*\?\[] ]]; then
-            # Expand glob pattern
-            if compgen -G "$path" > /dev/null 2>&1; then
-                for match in $path; do
-                    if [[ -e "$match" ]]; then
-                        if [[ "$bind_mode" = "rw" ]]; then
-                            BWRAP_ARGS+=(--bind "$match" "$match")
-                            log_info "${GREEN}✓${NC} Whitelisted (rw): $match"
-                        else
-                            BWRAP_ARGS+=(--ro-bind "$match" "$match")
-                            log_info "${GREEN}✓${NC} Whitelisted: $match"
-                        fi
-                    fi
-                done
-            else
-                log_info "${YELLOW}⚠${NC} No matches for pattern: $path"
-            fi
-        else
-            # Literal path (no glob)
-            if [[ -e "$path" ]]; then
-                if [[ "$bind_mode" = "rw" ]]; then
-                    BWRAP_ARGS+=(--bind "$path" "$path")
-                    log_info "${GREEN}✓${NC} Whitelisted (rw): $path"
-                else
-                    BWRAP_ARGS+=(--ro-bind "$path" "$path")
-                    log_info "${GREEN}✓${NC} Whitelisted: $path"
-                fi
-            else
-                log_info "${YELLOW}⚠${NC} Skipping non-existent path: $path"
-            fi
-        fi
+        # Process the path using the helper function
+        whitelist_path "$line" "$bind_mode"
     done < "$WHITELIST_FILE"
 done
+
+# Process direct whitelist paths (read-only)
+if [[ ${#WHITELIST_PATHS_RO[@]} -gt 0 ]]; then
+    log_info "${GREEN}Processing direct whitelist paths (read-only):${NC}"
+    for path in "${WHITELIST_PATHS_RO[@]}"; do
+        whitelist_path "$path" "ro"
+    done
+fi
+
+# Process direct whitelist paths (read-write)
+if [[ ${#WHITELIST_PATHS_RW[@]} -gt 0 ]]; then
+    log_info "${GREEN}Processing direct whitelist paths (read-write):${NC}"
+    for path in "${WHITELIST_PATHS_RW[@]}"; do
+        whitelist_path "$path" "rw"
+    done
+fi
 
 # Process all blacklist files and hide patterns with tmpfs overlays
 if [[ ${#BLACKLIST_FILES[@]} -gt 0 ]]; then
@@ -340,25 +416,17 @@ if [[ ${#BLACKLIST_FILES[@]} -gt 0 ]]; then
             pattern=$(strip_inline_comment "$pattern")
             [[ -z "$pattern" ]] && continue
 
-            # Find matching files/directories in working directory
-            if compgen -G "$WORKING_DIR/$pattern" > /dev/null 2>&1; then
-                for match in "$WORKING_DIR"/$pattern; do
-                    if [[ -e "$match" ]]; then
-                        if [[ -d "$match" ]]; then
-                            # Hide directories with tmpfs overlay
-                            BWRAP_ARGS+=(--tmpfs "$match")
-                            log_info "${RED}✗${NC} Blacklisted (dir): ${match#$WORKING_DIR/}"
-                        else
-                            # Hide files by binding /dev/null over them
-                            BWRAP_ARGS+=(--ro-bind /dev/null "$match")
-                            log_info "${RED}✗${NC} Blacklisted (file): ${match#$WORKING_DIR/}"
-                        fi
-                    fi
-                done
-            else
-                log_info "${YELLOW}⚠${NC} No matches for pattern: $pattern"
-            fi
+            # Process the pattern using the helper function
+            blacklist_pattern "$pattern"
         done < "$BLACKLIST_FILE"
+    done
+fi
+
+# Process direct blacklist paths
+if [[ ${#BLACKLIST_PATHS[@]} -gt 0 ]]; then
+    log_info "\n${YELLOW}Processing direct blacklist paths:${NC}"
+    for pattern in "${BLACKLIST_PATHS[@]}"; do
+        blacklist_pattern "$pattern"
     done
 fi
 
