@@ -295,13 +295,12 @@ application-secrets.yml
 keystore.jks
 ```
 
-### DevOps/Ansible setup:
+### DevOps/Ansible/Docker setup:
 ```bash
 # whitelist.txt
 # DevOps tools
-/usr/share/ansible
-/etc/ansible
-/opt/ansible
+/var/run/docker.sock
+/usr/libexec/docker
 
 # blacklist.txt
 .env
