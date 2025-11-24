@@ -1,7 +1,8 @@
 # Claude Code Sandbox Blacklist
 # Add paths relative to working directory that Claude should NOT access
 # Lines starting with # are ignored
-# Supports glob patterns (*, ?)
+# Supports glob patterns: *, ?
+# Supports ant-style recursive patterns: ** (e.g., **/wallet.dat matches anywhere)
 
 # Environment files with secrets
 .env
@@ -91,3 +92,10 @@ PRIVATE.md
 TODO-PRIVATE.md
 credentials.txt
 passwords.txt
+
+# Ant-style recursive patterns - block files anywhere in tree
+**/wallet.dat
+**/.env
+**/*.pem
+**/*.key
+**/secrets.json

@@ -136,8 +136,10 @@ The whitelist file contains **absolute paths or glob patterns** (one per line) t
 - **Read-write access**: Suffix a path with `:rw` to mount it read-write (e.g., `/path/to/dir:rw`)
   - Default: all paths are mounted read-only (safer)
   - Use `:rw` only for paths where Claude needs write access (caches, build outputs, etc.)
-  - Works with both literal paths and glob patterns (e.g., `/opt/cache-*:rw`)
-- **Glob patterns supported**: Use `*`, `?`, `[]` for pattern matching (e.g., `/etc/java*` expands to all matching directories)
+  - Works with both literal paths and patterns (e.g., `/opt/cache-*:rw`)
+- **Pattern support**:
+  - Simple glob: `*`, `?`, `[]` (e.g., `/etc/java*` matches `/etc/java-11`, `/etc/java-17`)
+  - **Ant-style recursive**: `**` for recursive directory matching (e.g., `/usr/**/lib64` matches any `lib64` directory under `/usr`)
 - Lines starting with `#` are ignored
 - Environment variables like `$HOME` are expanded
 - When using multiple whitelist files, all paths from all files are allowed
@@ -163,9 +165,27 @@ The blacklist file contains **relative paths** from the working directory that C
 
 **Important:**
 - Paths are relative to the working directory
-- Supports glob patterns (`*`, `?`)
+- **Pattern support**:
+  - Simple glob: `*`, `?` (e.g., `*.env` matches `.env.local`, `.env.prod`)
+  - **Ant-style recursive**: `**` for recursive matching (e.g., `**/wallet.dat` matches `wallet.dat` anywhere in the working directory tree)
 - Lines starting with `#` are ignored
 - When using multiple blacklist files, all patterns from all files are blocked
+
+**Examples of ant-style patterns:**
+```
+# Block wallet.dat anywhere in the project
+**/wallet.dat
+
+# Block all .env files recursively
+**/.env
+
+# Block all private key files anywhere
+**/*.pem
+**/*.key
+
+# Block test secrets in any test directory
+**/test/**/secrets.json
+```
 
 ## Security Considerations
 

@@ -105,30 +105,44 @@ shellcheck claude-code-sandbox.sh
 - The sandbox shares the host network namespace via `--share-net`
 - System DNS configuration is used for name resolution
 
-**Blacklist Implementation** (lines 254-289):
+**Pattern Matching Implementation** (find_matches function, lines 147-183):
+- **Unified approach**: All pattern matching uses `find` command for consistency
+- **Ant-style support**: Detects `**` patterns and handles them recursively
+- Simple patterns: Uses `-name` or `-path` with `-maxdepth 1` for performance
+- Recursive patterns: Uses `-name` or `-path` without depth limit
+- Complex patterns: Converts `**` to `*` for path matching (e.g., `src/**/test/**/*.java`)
+- Returns list of absolute paths matching the pattern
+
+**Blacklist Implementation** (blacklist_pattern function, lines 246-271):
 - **Multi-file processing**: Loops through all blacklist files in the array
-- Uses tmpfs mounts to hide paths (no file copying)
-- Glob patterns in blacklist are expanded at start time using `compgen -G`
+- Uses `find_matches()` to expand patterns (supports ant-style `**`)
+- Uses tmpfs mounts to hide directories (no file copying)
+- Uses `/dev/null` binding to hide files
 - Pattern matching happens against `$WORKING_DIR/$pattern`
 - Non-matching patterns generate warnings but don't fail
 - Missing blacklist files are skipped with warning (non-fatal)
 
-**Whitelist Implementation** (lines 216-246):
+**Whitelist Implementation** (whitelist_path function, lines 185-244):
 - **Multi-file processing**: Loops through all whitelist files in the array
-- Each path validated with `[[ -e "$path" ]]` before binding
+- Uses `find_matches()` to expand patterns (supports ant-style `**`)
 - Environment variable expansion: `${line/#\~/$HOME}` and `${path//\$HOME/$HOME}`
+- Extracts base directory from pattern for efficient find starting point
 - Non-existent paths are skipped with warning, not errors
-- All whitelist paths bound read-only via `--ro-bind`
+- Supports read-only (default) and read-write (`:rw` suffix) binding
 - Missing whitelist files are skipped with warning, but at least one file must exist
 
 ### Configuration File Format
 
-**Whitelist** (absolute paths or glob patterns, lines 246-277):
+**Whitelist** (absolute paths or patterns):
 - One path or pattern per line
 - Environment variable expansion supported: `$HOME` or `~`
-- **Glob pattern support**: Use `*`, `?`, `[]` for pattern matching (e.g., `/etc/java*`)
-- Patterns are expanded at sandbox start time using bash glob expansion
+- **Pattern support**:
+  - Simple glob: `*`, `?`, `[]` (e.g., `/etc/java*`)
+  - **Ant-style recursive**: `**` for recursive matching (e.g., `/usr/**/lib64`)
+  - Complex: Multiple `**` segments (e.g., `/opt/**/bin/**/tools`)
+- Patterns are expanded at sandbox start time using `find` command
 - Literal paths are validated before binding - non-existent paths are skipped
+- Read-write access: Append `:rw` to path/pattern (e.g., `/opt/cache:rw` or `/tmp/**:rw`)
 - Comments start with `#`
 - Empty lines ignored
 - **Multi-file support**: All paths from all whitelist files are merged and allowed
@@ -136,16 +150,25 @@ shellcheck claude-code-sandbox.sh
   - Project-level: `.claude/whitelist.txt` (if exists)
   - Additional: via `--whitelist` flags
 
-**Blacklist** (relative paths, lines 262-297):
+**Blacklist** (relative paths or patterns):
 - Paths relative to working directory
-- Glob patterns supported (`*`, `?`)
-- Patterns expanded using bash `compgen -G`
+- **Pattern support**:
+  - Simple glob: `*`, `?` (e.g., `*.env`)
+  - **Ant-style recursive**: `**` for recursive matching (e.g., `**/wallet.dat` blocks wallet.dat anywhere)
+  - Complex: Multiple `**` segments (e.g., `**/test/**/secrets.json`)
+- Patterns are expanded at sandbox start time using `find` command
 - Comments start with `#`
 - Empty lines ignored
 - **Multi-file support**: All patterns from all blacklist files are merged and blocked
   - User-level: `~/.config/claude-sandbox/blacklist.txt`
   - Project-level: `.claude/blacklist.txt` (if exists)
   - Additional: via `--blacklist` flags
+
+**Common Ant-Style Pattern Examples**:
+- `**/wallet.dat` - Matches wallet.dat in any subdirectory at any depth
+- `**/.env` - Matches .env files anywhere in the tree
+- `src/**/test/**/*.java` - Matches .java files in test directories under src
+- `/usr/**/lib64` - (whitelist) Matches any lib64 directory under /usr
 
 ## Modifying the Script
 

@@ -144,7 +144,51 @@ strip_inline_comment() {
     echo "$line"
 }
 
-# Whitelist a single path (with glob expansion support)
+# Find matches for a pattern (supports ant-style ** patterns)
+# Usage: find_matches <base_dir> <pattern>
+# Returns: list of matching absolute paths (one per line)
+find_matches() {
+    local base_dir="$1"
+    local pattern="$2"
+    local find_args=()
+
+    # If no pattern, just return the base_dir itself (literal path)
+    if [[ -z "$pattern" ]]; then
+        echo "$base_dir"
+        return
+    fi
+
+    # Convert ant-style pattern to find command
+    if [[ "$pattern" == *"**"* ]]; then
+        # Ant-style recursive pattern
+        # Extract the filename part after the last **
+        if [[ "$pattern" =~ \*\*/([^/]+)$ ]]; then
+            # Pattern like **/wallet.dat or src/**/wallet.dat
+            local filename="${BASH_REMATCH[1]}"
+            find_args=(-name "$filename")
+        else
+            # Complex pattern like src/**/test/**/*.java
+            # Convert ** to */ for path matching
+            local path_pattern="${pattern//\*\*/\*}"
+            find_args=(-path "$base_dir/$path_pattern")
+        fi
+    else
+        # Simple glob pattern - limit to single level
+        if [[ "$pattern" == */* ]]; then
+            # Pattern has directory components like dir/*.txt
+            local path_pattern="$pattern"
+            find_args=(-path "$base_dir/$path_pattern")
+        else
+            # Simple filename pattern like *.txt
+            find_args=(-maxdepth 1 -name "$pattern")
+        fi
+    fi
+
+    # Execute find and return results
+    find "$base_dir" "${find_args[@]}" 2>/dev/null
+}
+
+# Whitelist a single path (with glob and ant-style pattern support)
 # Usage: whitelist_path <path> <bind_mode>
 # bind_mode: "ro" for read-only, "rw" for read-write
 whitelist_path() {
@@ -155,61 +199,69 @@ whitelist_path() {
     path="${path/#\~/$HOME}"
     path="${path//\$HOME/$HOME}"
 
-    # Check if path contains glob characters
-    if [[ "$path" =~ [\*\?\[] ]]; then
-        # Expand glob pattern
-        if compgen -G "$path" > /dev/null 2>&1; then
-            for match in $path; do
-                if [[ -e "$match" ]]; then
-                    if [[ "$bind_mode" = "rw" ]]; then
-                        BWRAP_ARGS+=(--bind "$match" "$match")
-                        log_info "${GREEN}✓${NC} Whitelisted (rw): $match"
-                    else
-                        BWRAP_ARGS+=(--ro-bind "$match" "$match")
-                        log_info "${GREEN}✓${NC} Whitelisted: $match"
-                    fi
-                fi
-            done
-        else
-            log_info "${YELLOW}⚠${NC} No matches for pattern: $path"
-        fi
-    else
-        # Literal path (no glob)
-        if [[ -e "$path" ]]; then
-            if [[ "$bind_mode" = "rw" ]]; then
-                BWRAP_ARGS+=(--bind "$path" "$path")
-                log_info "${GREEN}✓${NC} Whitelisted (rw): $path"
-            else
-                BWRAP_ARGS+=(--ro-bind "$path" "$path")
-                log_info "${GREEN}✓${NC} Whitelisted: $path"
+    # Use find for all paths (patterns and literals)
+    local base_dir="/"
+    local pattern="$path"
+
+    # Extract base directory if path starts with absolute path
+    if [[ "$path" == /* ]]; then
+        # For patterns, find the first directory component before any wildcard
+        if [[ "$path" =~ [\*\?\[]|\*\* ]]; then
+            local prefix="${path%%[*?[]*}"
+            if [[ -d "$prefix" ]]; then
+                base_dir="$prefix"
+                pattern="${path#$prefix}"
+                pattern="${pattern#/}"
             fi
         else
-            log_info "${YELLOW}⚠${NC} Skipping non-existent path: $path"
+            # For literal paths, use the path itself as base_dir
+            base_dir="$path"
+            pattern=""
         fi
+    fi
+
+    local match_count=0
+    while IFS= read -r match; do
+        if [[ -e "$match" ]]; then
+            if [[ "$bind_mode" = "rw" ]]; then
+                BWRAP_ARGS+=(--bind "$match" "$match")
+                log_info "${GREEN}✓${NC} Whitelisted (rw): $match"
+            else
+                BWRAP_ARGS+=(--ro-bind "$match" "$match")
+                log_info "${GREEN}✓${NC} Whitelisted: $match"
+            fi
+            ((match_count++)) || true
+        fi
+    done < <(find_matches "$base_dir" "$pattern")
+
+    if [[ $match_count -eq 0 ]]; then
+        log_info "${YELLOW}⚠${NC} No matches for pattern: $path"
     fi
 }
 
-# Blacklist a single pattern (relative to working directory)
+# Blacklist a single pattern (relative to working directory, supports ant-style patterns)
 # Usage: blacklist_pattern <pattern>
 blacklist_pattern() {
     local pattern="$1"
 
-    # Find matching files/directories in working directory
-    if compgen -G "$WORKING_DIR/$pattern" > /dev/null 2>&1; then
-        for match in "$WORKING_DIR"/$pattern; do
-            if [[ -e "$match" ]]; then
-                if [[ -d "$match" ]]; then
-                    # Hide directories with tmpfs overlay
-                    BWRAP_ARGS+=(--tmpfs "$match")
-                    log_info "${RED}✗${NC} Blacklisted (dir): ${match#$WORKING_DIR/}"
-                else
-                    # Hide files by binding /dev/null over them
-                    BWRAP_ARGS+=(--ro-bind /dev/null "$match")
-                    log_info "${RED}✗${NC} Blacklisted (file): ${match#$WORKING_DIR/}"
-                fi
+    # Use find to match patterns (supports ant-style **)
+    local match_count=0
+    while IFS= read -r match; do
+        if [[ -e "$match" ]]; then
+            if [[ -d "$match" ]]; then
+                # Hide directories with tmpfs overlay
+                BWRAP_ARGS+=(--tmpfs "$match")
+                log_info "${RED}✗${NC} Blacklisted (dir): ${match#$WORKING_DIR/}"
+            else
+                # Hide files by binding /dev/null over them
+                BWRAP_ARGS+=(--ro-bind /dev/null "$match")
+                log_info "${RED}✗${NC} Blacklisted (file): ${match#$WORKING_DIR/}"
             fi
-        done
-    else
+            ((match_count++)) || true
+        fi
+    done < <(find_matches "$WORKING_DIR" "$pattern")
+
+    if [[ $match_count -eq 0 ]]; then
         log_info "${YELLOW}⚠${NC} No matches for pattern: $pattern"
     fi
 }

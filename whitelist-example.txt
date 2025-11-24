@@ -2,6 +2,8 @@
 # Add absolute paths (one per line) that Claude should be able to read
 # Lines starting with # are ignored
 # You can use environment variables like $HOME
+# Supports glob patterns: *, ?, []
+# Supports ant-style recursive patterns: ** (e.g., /usr/**/lib64)
 
 # Essential system directories for executables
 /usr/bin
