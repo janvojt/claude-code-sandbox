@@ -1,9 +1,19 @@
 # Claude Code Sandbox Whitelist
-# Add absolute paths (one per line) that Claude should be able to read
+# Add absolute or relative paths (one per line) that Claude should be able to read
+# - Absolute paths: start with / (e.g., /usr/bin)
+# - Relative paths: resolved relative to working directory (e.g., data/, src/**)
 # Lines starting with # are ignored
-# You can use environment variables like $HOME
+# You can use environment variables like $HOME or ~
 # Supports glob patterns: *, ?, []
-# Supports ant-style recursive patterns: ** (e.g., /usr/**/lib64)
+# Supports ant-style recursive patterns: ** (e.g., /usr/**/lib64 or src/**/config)
+# Append :rw for read-write access (e.g., /tmp/cache:rw or data/:rw)
+
+# Example: Relative paths (resolved relative to working directory)
+# data/                    # Allow read access to data/ directory
+# config/                  # Allow read access to config/ directory
+# src/**/*.json            # Allow all .json files under src/
+# docs/**                  # Allow all files under docs/ recursively
+# build/:rw                # Allow read-write access to build/ directory
 
 # Essential system directories for executables
 /usr/bin

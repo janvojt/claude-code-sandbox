@@ -13,7 +13,7 @@ This is a bash-based sandboxing solution for running Claude Code in isolated env
 **Main Script: `claude-code-sandbox.sh`**
 - Single executable bash script that wraps Claude Code in a bubblewrap sandbox
 - Implements two-tier filesystem access control with **multi-file support**:
-  1. **Whitelist**: Absolute system paths Claude can read
+  1. **Whitelist**: Absolute or relative paths Claude can read (relative paths resolved relative to working directory)
      - User-level: `~/.config/claude-sandbox/whitelist.txt` (always included, auto-generated)
      - Project-level: `.claude/whitelist.txt` in working directory (included if exists)
      - Additional files via `--whitelist` flag (can be specified multiple times)
@@ -122,10 +122,11 @@ shellcheck claude-code-sandbox.sh
 - Non-matching patterns generate warnings but don't fail
 - Missing blacklist files are skipped with warning (non-fatal)
 
-**Whitelist Implementation** (whitelist_path function, lines 185-244):
+**Whitelist Implementation** (whitelist_path function, lines 191-246):
 - **Multi-file processing**: Loops through all whitelist files in the array
 - Uses `find_matches()` to expand patterns (supports ant-style `**`)
 - Environment variable expansion: `${line/#\~/$HOME}` and `${path//\$HOME/$HOME}`
+- **Relative path support**: Paths not starting with `/`, `~`, or `$HOME` are converted to absolute by prepending `$WORKING_DIR`
 - Extracts base directory from pattern for efficient find starting point
 - Non-existent paths are skipped with warning, not errors
 - Supports read-only (default) and read-write (`:rw` suffix) binding
@@ -133,16 +134,18 @@ shellcheck claude-code-sandbox.sh
 
 ### Configuration File Format
 
-**Whitelist** (absolute paths or patterns):
+**Whitelist** (absolute or relative paths/patterns):
 - One path or pattern per line
+- Supports both absolute paths (e.g., `/usr/bin`) and relative paths (e.g., `data/`, `src/**/*.txt`)
+- Relative paths are resolved relative to the working directory
 - Environment variable expansion supported: `$HOME` or `~`
 - **Pattern support**:
-  - Simple glob: `*`, `?`, `[]` (e.g., `/etc/java*`)
-  - **Ant-style recursive**: `**` for recursive matching (e.g., `/usr/**/lib64`)
-  - Complex: Multiple `**` segments (e.g., `/opt/**/bin/**/tools`)
+  - Simple glob: `*`, `?`, `[]` (e.g., `/etc/java*` or `*.json`)
+  - **Ant-style recursive**: `**` for recursive matching (e.g., `/usr/**/lib64` or `src/**`)
+  - Complex: Multiple `**` segments (e.g., `/opt/**/bin/**/tools` or `data/**/cache`)
 - Patterns are expanded at sandbox start time using `find` command
 - Literal paths are validated before binding - non-existent paths are skipped
-- Read-write access: Append `:rw` to path/pattern (e.g., `/opt/cache:rw` or `/tmp/**:rw`)
+- Read-write access: Append `:rw` to path/pattern (e.g., `/opt/cache:rw` or `data/:rw`)
 - Comments start with `#`
 - Empty lines ignored
 - **Multi-file support**: All paths from all whitelist files are merged and allowed
@@ -165,10 +168,12 @@ shellcheck claude-code-sandbox.sh
   - Additional: via `--blacklist` flags
 
 **Common Ant-Style Pattern Examples**:
-- `**/wallet.dat` - Matches wallet.dat in any subdirectory at any depth
-- `**/.env` - Matches .env files anywhere in the tree
-- `src/**/test/**/*.java` - Matches .java files in test directories under src
-- `/usr/**/lib64` - (whitelist) Matches any lib64 directory under /usr
+- `**/wallet.dat` - (blacklist) Matches wallet.dat in any subdirectory at any depth
+- `**/.env` - (blacklist) Matches .env files anywhere in the tree
+- `src/**/test/**/*.java` - (blacklist) Matches .java files in test directories under src
+- `/usr/**/lib64` - (whitelist, absolute) Matches any lib64 directory under /usr
+- `data/**` - (whitelist, relative) Matches all files under the data/ directory in working directory
+- `src/**/*.json` - (whitelist, relative) Matches all .json files anywhere under src/ directory
 
 ## Modifying the Script
 
@@ -231,10 +236,12 @@ When modifying the script:
 7. Test with empty working directory
 8. Test with glob patterns in blacklist (`*.env`, `.secrets/*`)
 9. Test with environment variable expansion in whitelist (`$HOME/.local`, `~/.local`)
-10. Verify cleanup on clean exit and interrupt (Ctrl+C) - check for temp file leaks
-11. Test with missing additional files (should skip with warning, not fail)
-12. Test Claude Code can still access its config: check `~/.claude/` and `~/.claude.json`
-13. Verify configuration summary shows all whitelist/blacklist files being used (user, project, and explicit)
+10. Test with relative paths in whitelist (`data/`, `src/**/*.txt`)
+11. Test with ant-style patterns in both absolute and relative whitelist paths
+12. Verify cleanup on clean exit and interrupt (Ctrl+C) - check for temp file leaks
+13. Test with missing additional files (should skip with warning, not fail)
+14. Test Claude Code can still access its config: check `~/.claude/` and `~/.claude.json`
+15. Verify configuration summary shows all whitelist/blacklist files being used (user, project, and explicit)
 
 ## Files in Repository
 

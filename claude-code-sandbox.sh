@@ -51,10 +51,11 @@ IMPLICIT CONFIGURATION FILES (automatically included if they exist):
        - .claude/blacklist.txt (in working directory)
 
 CONFIGURATION FILE FORMAT:
-    Whitelist: Contains absolute paths or glob patterns (one per line) that Claude can read
+    Whitelist: Contains absolute or relative paths/patterns (one per line) that Claude can read
+               Relative paths are resolved relative to working directory
                Default: read-only bind mount
-               Suffix with :rw for read-write bind (e.g., /path/to/dir:rw or /path/*:rw)
-               Supports glob patterns: /etc/java* will expand to all matching paths
+               Suffix with :rw for read-write bind (e.g., /path/to/dir:rw or data/:rw)
+               Supports glob patterns: /etc/java* or src/** will expand to all matching paths
     Blacklist: Contains paths relative to working directory that Claude cannot access
 
 EXAMPLES:
@@ -191,6 +192,7 @@ find_matches() {
 # Whitelist a single path (with glob and ant-style pattern support)
 # Usage: whitelist_path <path> <bind_mode>
 # bind_mode: "ro" for read-only, "rw" for read-write
+# Supports both absolute paths and relative paths (relative to working directory)
 whitelist_path() {
     local path="$1"
     local bind_mode="$2"
@@ -198,6 +200,11 @@ whitelist_path() {
     # Expand environment variables without eval (faster)
     path="${path/#\~/$HOME}"
     path="${path//\$HOME/$HOME}"
+
+    # Convert relative paths to absolute (relative to working directory)
+    if [[ "$path" != /* ]]; then
+        path="$WORKING_DIR/$path"
+    fi
 
     # Use find for all paths (patterns and literals)
     local base_dir="/"
