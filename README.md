@@ -150,17 +150,18 @@ The blacklist file contains **relative paths** from the working directory that C
 
 ```
 # Environment files
-.env
-.env.*
+**/.env
+**/.env.*
 
 # SSH keys
-.ssh
-*.pem
-*.key
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_ed25519
 
 # Cloud credentials
-.aws
-.gcp
+**/.aws
+**/.gcp
 ```
 
 **Important:**

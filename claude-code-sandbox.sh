@@ -335,33 +335,28 @@ if [[ ! -f "$DEFAULT_BLACKLIST_FILE" ]] && [[ "$EXPLICIT_BLACKLIST" = false ]]; 
 # Lines starting with # are ignored
 
 # Common sensitive files
-.env
-.env.local
-.env.production
-secrets.*
-.secrets.*
-*token*.json
+**/.env
 
 # SSH and crypto keys
-.ssh
-*.pem
-*.key
-id_rsa
-id_ed25519
-*.p12
-*.pfx
+**/.ssh
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_ed25519
+**/*.p12
+**/*.pfx
 
 # AWS credentials
-.aws/credentials
+**/.aws/credentials
 
 # Docker and Kubernetes secrets
-docker-compose.override.yml
-.kube/config
+**/docker-compose.override.yml
+**/.kube/config
 
 # Password managers
-*.kdbx
-*.agilekeychain
-.vault_password
+**/*.kdbx
+**/*.agilekeychain
+**/.vault_password
 
 EOBLACKLIST
     echo -e "${GREEN}Created default blacklist at $DEFAULT_BLACKLIST_FILE${NC}" >&2
