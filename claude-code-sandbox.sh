@@ -23,21 +23,23 @@ EXPLICIT_WHITELIST=false
 EXPLICIT_BLACKLIST=false
 QUIET=false
 DRY_RUN=false
+AGENT="claudecode"
 
 # Print usage
 usage() {
     cat << EOF
-Usage: $0 [OPTIONS] [-- CLAUDE_ARGS...]
+Usage: $0 [OPTIONS] [-- AGENT_ARGS...]
 
-Securely run Claude Code in a sandboxed environment using bubblewrap.
+Securely run AI coding agents in a sandboxed environment using bubblewrap.
 
 OPTIONS:
+    --agent, -a AGENT      AI coding agent to use: claudecode (default) or opencode
     --whitelist FILE        Add whitelist file (can be specified multiple times)
     --blacklist FILE        Add blacklist file (can be specified multiple times)
     --whitelist-path PATH   Directly whitelist a path (read-only, can be specified multiple times)
     --whitelist-path-rw PATH Directly whitelist a path (read-write, can be specified multiple times)
     --blacklist-path PATH   Directly blacklist a path (relative to working dir, can be specified multiple times)
-    --dry-run              Start bash shell instead of Claude Code (for testing)
+    --dry-run              Start bash shell instead of agent (for testing)
     --quiet, -q            Suppress informational output (faster startup)
     --verbose, -v          Show detailed output (default)
     -h, --help             Show this help message
@@ -60,19 +62,21 @@ CONFIGURATION FILE FORMAT:
 
 EXAMPLES:
     $0
+    $0 --agent opencode
     $0 --whitelist /path/to/custom-whitelist.txt
     $0 --whitelist file1.txt --whitelist file2.txt
     $0 --whitelist-path /var/run/docker.sock
     $0 --whitelist-path-rw /shared/data
     $0 --blacklist-path .env --blacklist-path secrets/
     $0 -- --model claude-sonnet-4-5
+    $0 -a opencode -- --model deepseek-chat
 
 EOF
     exit 1
 }
 
 # Parse command line arguments
-CLAUDE_ARGS=()
+AGENT_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --whitelist)
@@ -100,6 +104,10 @@ while [[ $# -gt 0 ]]; do
             EXPLICIT_WHITELIST=true
             shift 2
             ;;
+        --agent|-a)
+            AGENT="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -117,7 +125,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --)
             shift
-            CLAUDE_ARGS=("$@")
+            AGENT_ARGS=("$@")
             break
             ;;
         *)
@@ -273,9 +281,14 @@ blacklist_pattern() {
     fi
 }
 
+# Validate agent selection
+if [[ "$AGENT" != "claudecode" ]] && [[ "$AGENT" != "opencode" ]]; then
+    echo -e "${RED}Error: Invalid agent '$AGENT'. Must be 'claudecode' or 'opencode'${NC}" >&2
+    exit 1
+fi
+
 # Cache command availability checks
 BWRAP_BIN=$(command -v bwrap 2>/dev/null)
-CLAUDE_BIN=$(command -v claude 2>/dev/null)
 
 # Check if bubblewrap is installed
 if [[ -z "$BWRAP_BIN" ]]; then
@@ -284,11 +297,21 @@ if [[ -z "$BWRAP_BIN" ]]; then
     exit 1
 fi
 
-# Check if claude is installed
-if [[ -z "$CLAUDE_BIN" ]]; then
-    echo -e "${RED}Error: claude is not installed${NC}" >&2
-    echo "Install it from: https://docs.claude.com/en/docs/claude-code" >&2
-    exit 1
+# Detect agent binary based on selection
+if [[ "$AGENT" = "claudecode" ]]; then
+    AGENT_BIN=$(command -v claude 2>/dev/null)
+    if [[ -z "$AGENT_BIN" ]]; then
+        echo -e "${RED}Error: claude is not installed${NC}" >&2
+        echo "Install it from: https://docs.claude.com/en/docs/claude-code" >&2
+        exit 1
+    fi
+elif [[ "$AGENT" = "opencode" ]]; then
+    AGENT_BIN="$HOME/.opencode/bin/opencode"
+    if [[ ! -x "$AGENT_BIN" ]]; then
+        echo -e "${RED}Error: opencode is not installed at $AGENT_BIN${NC}" >&2
+        echo "Install it from: https://opencode.dev" >&2
+        exit 1
+    fi
 fi
 
 # Create default whitelist if it doesn't exist and no explicit whitelist was given
@@ -484,32 +507,52 @@ if [[ ${#BLACKLIST_PATHS[@]} -gt 0 ]]; then
     done
 fi
 
-# Bind claude binary
-if [[ -x "$HOME/.local/bin/claude" ]]; then
-    BWRAP_ARGS+=(--ro-bind "$HOME/.local/bin/claude" "$HOME/.local/bin/claude")
-    log_info "${GREEN}✓${NC} Mounted ~/.local/bin/claude (read-only)"
-fi
+# Agent-specific configuration bindings
+if [[ "$AGENT" = "claudecode" ]]; then
+    # Bind claude binary
+    if [[ -x "$HOME/.local/bin/claude" ]]; then
+        BWRAP_ARGS+=(--ro-bind "$HOME/.local/bin/claude" "$HOME/.local/bin/claude")
+        log_info "${GREEN}✓${NC} Mounted ~/.local/bin/claude (read-only)"
+    fi
 
-# Bind ~/.claude directory (main config location)
-if [[ -d "$HOME/.claude" ]]; then
-    BWRAP_ARGS+=(--bind "$HOME/.claude" "$HOME/.claude")
-    log_info "${GREEN}✓${NC} Mounted ~/.claude (read-write)"
-fi
+    # Bind ~/.claude directory (main config location)
+    if [[ -d "$HOME/.claude" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.claude" "$HOME/.claude")
+        log_info "${GREEN}✓${NC} Mounted ~/.claude (read-write)"
+    fi
 
-# Bind ~/.claude.json file (state file in home directory)
-if [[ -f "$HOME/.claude.json" ]]; then
-    BWRAP_ARGS+=(--bind "$HOME/.claude.json" "$HOME/.claude.json")
-    log_info "${GREEN}✓${NC} Mounted ~/.claude.json (read-write)"
-else
-    # Create empty file if it doesn't exist so Claude can write to it
-    touch "$HOME/.claude.json"
-    BWRAP_ARGS+=(--bind "$HOME/.claude.json" "$HOME/.claude.json")
-    log_info "${YELLOW}✓${NC} Created and mounted ~/.claude.json (read-write)"
-fi
+    # Bind ~/.claude.json file (state file in home directory)
+    if [[ -f "$HOME/.claude.json" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.claude.json" "$HOME/.claude.json")
+        log_info "${GREEN}✓${NC} Mounted ~/.claude.json (read-write)"
+    else
+        # Create empty file if it doesn't exist so Claude can write to it
+        touch "$HOME/.claude.json"
+        BWRAP_ARGS+=(--bind "$HOME/.claude.json" "$HOME/.claude.json")
+        log_info "${YELLOW}✓${NC} Created and mounted ~/.claude.json (read-write)"
+    fi
 
-# Bind ~/.claude.json.backup if it exists
-if [[ -f "$HOME/.claude.json.backup" ]]; then
-    BWRAP_ARGS+=(--bind "$HOME/.claude.json.backup" "$HOME/.claude.json.backup")
+    # Bind ~/.claude.json.backup if it exists
+    if [[ -f "$HOME/.claude.json.backup" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.claude.json.backup" "$HOME/.claude.json.backup")
+    fi
+elif [[ "$AGENT" = "opencode" ]]; then
+    # Bind opencode binary and directory
+    if [[ -d "$HOME/.opencode" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.opencode" "$HOME/.opencode")
+        log_info "${GREEN}✓${NC} Mounted ~/.opencode (read-write)"
+    fi
+
+    # Bind ~/.opencode.json file (state file in home directory)
+    if [[ -f "$HOME/.opencode.json" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.opencode.json" "$HOME/.opencode.json")
+        log_info "${GREEN}✓${NC} Mounted ~/.opencode.json (read-write)"
+    else
+        # Create empty file if it doesn't exist so opencode can write to it
+        touch "$HOME/.opencode.json"
+        BWRAP_ARGS+=(--bind "$HOME/.opencode.json" "$HOME/.opencode.json")
+        log_info "${YELLOW}✓${NC} Created and mounted ~/.opencode.json (read-write)"
+    fi
 fi
 
 BWRAP_ARGS+=(--setenv HOME "$HOME")
@@ -534,20 +577,27 @@ fi
 
 # Set minimal environment
 BWRAP_ARGS+=(--setenv TERM "${TERM:-xterm-256color}")
-BWRAP_ARGS+=(--setenv PATH "$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")
+if [[ "$AGENT" = "claudecode" ]]; then
+    BWRAP_ARGS+=(--setenv PATH "$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")
+elif [[ "$AGENT" = "opencode" ]]; then
+    BWRAP_ARGS+=(--setenv PATH "$HOME/.opencode/bin:/usr/local/bin:/usr/bin:/bin")
+fi
 BWRAP_ARGS+=(--unsetenv SSH_AUTH_SOCK)
 BWRAP_ARGS+=(--unsetenv SSH_AGENT_PID)
 
-# Preserve Claude-specific environment variables
-if [[ -n "${CLAUDECODE:-}" ]]; then
-    BWRAP_ARGS+=(--setenv CLAUDECODE "$CLAUDECODE")
-fi
-if [[ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]; then
-    BWRAP_ARGS+=(--setenv CLAUDE_CODE_ENTRYPOINT "$CLAUDE_CODE_ENTRYPOINT")
+# Preserve agent-specific environment variables
+if [[ "$AGENT" = "claudecode" ]]; then
+    if [[ -n "${CLAUDECODE:-}" ]]; then
+        BWRAP_ARGS+=(--setenv CLAUDECODE "$CLAUDECODE")
+    fi
+    if [[ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]; then
+        BWRAP_ARGS+=(--setenv CLAUDE_CODE_ENTRYPOINT "$CLAUDE_CODE_ENTRYPOINT")
+    fi
 fi
 
 # Display configuration summary
-log_info "\n${GREEN}=== Claude Code Sandbox Configuration ===${NC}"
+log_info "\n${GREEN}=== AI Coding Agent Sandbox Configuration ===${NC}"
+log_info "Agent: ${YELLOW}$AGENT${NC}"
 log_info "Working Directory: ${YELLOW}$WORKING_DIR${NC}"
 log_info "Whitelist Files (${#WHITELIST_FILES[@]}):"
 for wfile in "${WHITELIST_FILES[@]}"; do
@@ -557,12 +607,12 @@ log_info "Blacklist Files (${#BLACKLIST_FILES[@]}):"
 for bfile in "${BLACKLIST_FILES[@]}"; do
     log_info "  ${YELLOW}$bfile${NC}"
 done
-log_info "${GREEN}=========================================${NC}\n"
+log_info "${GREEN}=============================================${NC}\n"
 
-# Execute Claude Code or bash (for dry-run) in sandbox
+# Execute agent or bash (for dry-run) in sandbox
 if [[ "$DRY_RUN" = true ]]; then
     log_info "${YELLOW}=== DRY RUN MODE: Starting bash shell in sandbox ===${NC}\n"
     exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- /bin/bash
 else
-    exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}"
+    exec "$BWRAP_BIN" "${BWRAP_ARGS[@]}" -- "$AGENT_BIN" "${AGENT_ARGS[@]}"
 fi
