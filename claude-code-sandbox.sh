@@ -553,6 +553,44 @@ elif [[ "$AGENT" = "opencode" ]]; then
         BWRAP_ARGS+=(--bind "$HOME/.opencode.json" "$HOME/.opencode.json")
         log_info "${YELLOW}✓${NC} Created and mounted ~/.opencode.json (read-write)"
     fi
+
+    # Bind XDG directories for OpenCode (settings, cache, state, data)
+    # OpenCode follows XDG Base Directory Specification
+    if [[ -d "$HOME/.config/opencode" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.config/opencode" "$HOME/.config/opencode")
+        log_info "${GREEN}✓${NC} Mounted ~/.config/opencode (read-write)"
+    else
+        mkdir -p "$HOME/.config/opencode"
+        BWRAP_ARGS+=(--bind "$HOME/.config/opencode" "$HOME/.config/opencode")
+        log_info "${YELLOW}✓${NC} Created and mounted ~/.config/opencode (read-write)"
+    fi
+
+    if [[ -d "$HOME/.cache/opencode" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.cache/opencode" "$HOME/.cache/opencode")
+        log_info "${GREEN}✓${NC} Mounted ~/.cache/opencode (read-write)"
+    else
+        mkdir -p "$HOME/.cache/opencode"
+        BWRAP_ARGS+=(--bind "$HOME/.cache/opencode" "$HOME/.cache/opencode")
+        log_info "${YELLOW}✓${NC} Created and mounted ~/.cache/opencode (read-write)"
+    fi
+
+    if [[ -d "$HOME/.local/state/opencode" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.local/state/opencode" "$HOME/.local/state/opencode")
+        log_info "${GREEN}✓${NC} Mounted ~/.local/state/opencode (read-write)"
+    else
+        mkdir -p "$HOME/.local/state/opencode"
+        BWRAP_ARGS+=(--bind "$HOME/.local/state/opencode" "$HOME/.local/state/opencode")
+        log_info "${YELLOW}✓${NC} Created and mounted ~/.local/state/opencode (read-write)"
+    fi
+
+    if [[ -d "$HOME/.local/share/opencode" ]]; then
+        BWRAP_ARGS+=(--bind "$HOME/.local/share/opencode" "$HOME/.local/share/opencode")
+        log_info "${GREEN}✓${NC} Mounted ~/.local/share/opencode (read-write)"
+    else
+        mkdir -p "$HOME/.local/share/opencode"
+        BWRAP_ARGS+=(--bind "$HOME/.local/share/opencode" "$HOME/.local/share/opencode")
+        log_info "${YELLOW}✓${NC} Created and mounted ~/.local/share/opencode (read-write)"
+    fi
 fi
 
 BWRAP_ARGS+=(--setenv HOME "$HOME")
