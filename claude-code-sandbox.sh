@@ -222,10 +222,13 @@ whitelist_path() {
     if [[ "$path" == /* ]]; then
         # For patterns, find the first directory component before any wildcard
         if [[ "$path" =~ [\*\?\[]|\*\* ]]; then
+            # Always use the parent directory of the pattern, not the prefix itself
             local prefix="${path%%[*?[]*}"
-            if [[ -d "$prefix" ]]; then
-                base_dir="$prefix"
-                pattern="${path#$prefix}"
+            # Strip to the last directory separator to get the parent
+            local parent="${prefix%/*}"
+            if [[ -d "$parent" && -n "$parent" ]]; then
+                base_dir="$parent"
+                pattern="${path#$parent}"
                 pattern="${pattern#/}"
             fi
         else
@@ -507,7 +510,7 @@ if [[ ${#BLACKLIST_PATHS[@]} -gt 0 ]]; then
     done
 fi
 
-# Agent-specific configuration bindings
+log_info "\n${YELLOW}Agent-specific configuration bindings:"
 if [[ "$AGENT" = "claudecode" ]]; then
     # Bind claude binary
     if [[ -x "$HOME/.local/bin/claude" ]]; then
