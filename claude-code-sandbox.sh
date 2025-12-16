@@ -621,7 +621,7 @@ BWRAP_ARGS+=(--setenv TERM "${TERM:-xterm-256color}")
 if [[ "$AGENT" = "claudecode" ]]; then
     BWRAP_ARGS+=(--setenv PATH "$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")
 elif [[ "$AGENT" = "opencode" ]]; then
-    BWRAP_ARGS+=(--setenv PATH "$HOME/.opencode/bin:/usr/local/bin:/usr/bin:/bin")
+    BWRAP_ARGS+=(--setenv PATH "$HOME/.opencode/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin")
 fi
 BWRAP_ARGS+=(--unsetenv SSH_AUTH_SOCK)
 BWRAP_ARGS+=(--unsetenv SSH_AGENT_PID)
