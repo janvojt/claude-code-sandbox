@@ -513,9 +513,22 @@ fi
 log_info "\n${YELLOW}Agent-specific configuration bindings:"
 if [[ "$AGENT" = "claudecode" ]]; then
     # Bind claude binary
-    if [[ -x "$HOME/.local/bin/claude" ]]; then
-        BWRAP_ARGS+=(--ro-bind "$HOME/.local/bin/claude" "$HOME/.local/bin/claude")
-        log_info "${GREEN}✓${NC} Mounted ~/.local/bin/claude (read-only)"
+    if [[ -e "$HOME/.local/bin/claude" ]]; then
+        # If it's a symlink, we need to bind the target first, then create the symlink
+        if [[ -L "$HOME/.local/bin/claude" ]]; then
+            CLAUDE_TARGET=$(readlink -f "$HOME/.local/bin/claude")
+            if [[ -f "$CLAUDE_TARGET" ]]; then
+                # Bind the actual binary/target
+                BWRAP_ARGS+=(--ro-bind "$CLAUDE_TARGET" "$CLAUDE_TARGET")
+                # Create a symlink in the sandbox
+                BWRAP_ARGS+=(--symlink "${CLAUDE_TARGET}" "$HOME/.local/bin/claude")
+                log_info "${GREEN}✓${NC} Mounted $CLAUDE_TARGET and created symlink at ~/.local/bin/claude (read-only)"
+            fi
+        elif [[ -x "$HOME/.local/bin/claude" ]]; then
+            # It's a regular file, bind it directly
+            BWRAP_ARGS+=(--ro-bind "$HOME/.local/bin/claude" "$HOME/.local/bin/claude")
+            log_info "${GREEN}✓${NC} Mounted ~/.local/bin/claude (read-only)"
+        fi
     fi
 
     # Bind ~/.claude directory (main config location)
